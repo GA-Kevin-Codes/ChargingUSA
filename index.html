@@ -845,11 +845,32 @@ body.is-improving { overflow: hidden; }
 .ab-cta--block { width: 100%; margin-top: 12px; padding: 11px 14px; }
 
 /* ---------- rail + map ---------- */
-.ab-main { display: grid; grid-template-columns: 272px 1fr; }
+/* Rail, map, rail. The two rails ask the same question of different axes —
+   which network is behind, which state is behind — and the map between them is
+   what both of them filter. */
+.ab-main { display: grid; grid-template-columns: 272px minmax(0, 1fr) 272px; }
 .ab-rail {
   display: flex; flex-direction: column; min-width: 0;
   border-right: 1px solid var(--hairline); background: var(--rail);
 }
+.ab-rail--right { border-right: 0; border-left: 1px solid var(--hairline); }
+.ab-seg--mini button { padding: 4px 7px; letter-spacing: .04em; }
+
+/* A state row carries what a network row does: the name, the figure, and a bar
+   underneath for the share already on the map. */
+.ab-state {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: baseline;
+  width: 100%; padding: 7px 8px; text-align: left; cursor: pointer;
+  background: transparent; border: 0; color: var(--ink-2); font: inherit;
+}
+.ab-state:hover { background: var(--sunken); color: var(--ink); }
+.ab-state.is-on { background: var(--accent-wash); color: var(--ink); }
+.ab-state-name { display: flex; align-items: baseline; gap: 7px; min-width: 0; font-size: var(--t-small); font-weight: 600; }
+.ab-state-code { font-family: "IBM Plex Mono", monospace; color: var(--muted); font-weight: 400; }
+.ab-state-n { font-family: "IBM Plex Mono", monospace; font-size: var(--t-micro); color: var(--muted); }
+.ab-state-track { grid-column: 1 / -1; height: 3px; background: var(--hairline); }
+.ab-state-fill { display: block; height: 100%; background: var(--s3); }
+.ab-state.is-thin .ab-state-fill { background: var(--faint); }
 .ab-rail-head {
   display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
   padding: 15px 16px 13px;
@@ -948,7 +969,7 @@ body.is-improving { overflow: hidden; }
 .ab-kpi-sub { font-size: var(--t-small); color: var(--faint); }
 
 /* ---------- the three columns ---------- */
-.ab-cols { display: grid; grid-template-columns: 1fr 1.25fr 0.85fr; }
+.ab-cols { display: grid; grid-template-columns: 1.4fr 1fr; }
 .ab-col { padding: 20px; min-width: 0; }
 .ab-col + .ab-col { border-left: 1px solid var(--hairline); }
 .ab-kicker {
@@ -1004,9 +1025,13 @@ body.is-improving { overflow: hidden; }
 /* ---------- the kept table ---------- */
 .ab-table { padding: 20px; border-top: 1px solid var(--hairline); }
 
+@media (max-width: 1400px) {
+  .ab-main { grid-template-columns: 232px minmax(0, 1fr) 232px; }
+}
 @media (max-width: 1100px) {
   .ab-main { grid-template-columns: 1fr; }
   .ab-rail { border-right: 0; border-bottom: 1px solid var(--hairline); }
+  .ab-rail--right { border-left: 0; border-top: 1px solid var(--hairline); }
   .ab-rail-list { max-height: 240px; }
   .ab-cols { grid-template-columns: 1fr; }
   .ab-col + .ab-col { border-left: 0; border-top: 1px solid var(--hairline); }
@@ -1083,6 +1108,16 @@ body.is-improving { overflow: hidden; }
         <span class="ab-hint" id="map-hint">Click a state to zoom into its sites</span>
       </div>
     </section>
+
+    <aside class="ab-rail ab-rail--right">
+      <div class="ab-rail-head">
+        <span class="ab-h">State</span>
+        <div class="ab-seg ab-seg--mini" id="state-order" role="group" aria-label="Order states by"></div>
+      </div>
+      <input id="state-query" class="ab-query" type="search" autocomplete="off" placeholder="Filter states" aria-label="Filter states">
+      <div class="ab-rail-list" id="staterail"></div>
+      <p class="ab-rail-foot" id="statemap-note"></p>
+    </aside>
   </div>
 
   <!-- ── figures ─────────────────────────────────────────────────────────── -->
@@ -1090,13 +1125,6 @@ body.is-improving { overflow: hidden; }
 
   <!-- ── three questions ─────────────────────────────────────────────────── -->
   <div class="ab-cols">
-    <section class="ab-col">
-      <div class="ab-kicker">Ranked</div>
-      <h3>Most sites off the map</h3>
-      <p class="ab-note" id="statemap-note"></p>
-      <div class="funnel ab-rank" id="statebars"></div>
-    </section>
-
     <section class="ab-col">
       <div class="ab-kicker">Work queue</div>
       <h3>Opened in the last 30 days</h3>

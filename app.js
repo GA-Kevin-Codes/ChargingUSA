@@ -105,10 +105,10 @@ const VIEW = { state: null, net: null, selected: null, metric: "pop", zoom: 1, p
                // still read by the editor's own "opened within" filter
                impOpen: null,
                // how the per-state coverage list is ordered
-               stateOrder: "gap",
+               stateOrder: "pct",
                // the atlas: which figure shades the states, which sites show as
                // dots, and the rail's filter box
-               mapMetric: "mapped", dots: "both", query: "" };
+               mapMetric: "mapped", dots: "both", query: "", stateQuery: "" };
 let MERGED = null;
 
 const CONUS = { lat0: 24, lat1: 50, lon0: -125, lon1: -66 };
@@ -809,7 +809,7 @@ function render(M) {
   }
 
   /* ---- three columns ---- */
-  safe("ranked", () => renderStateCoverage(choroSites));
+  safe("state rail", () => renderStateCoverage(choroSites));
   safe("work queue", () => renderOpenings(S));
   safe("method", () => renderMethod(M, S));
   safe("export button", paintExport);
@@ -1145,11 +1145,27 @@ function paintExport() {
    about places where the number means something. States under it are still
    reachable through the picker and the map — they are left out of the ranking,
    not out of the board. */
+/* The right-hand rail: every state, and how much of it is on the map.
+
+   The mirror of the network rail — same row shape, same click-to-filter, the
+   other axis of the same question. Ordered by whichever the toggle says, and
+   the two orders answer different things: percent finds the worst-covered
+   state, count finds the biggest job. Vermont at 40% of five sites is not the
+   work that California at 53% of 2,266 is.
+
+   Every state is listed rather than ranked past a floor, because a rail is
+   something you scroll to find a place in, not a leaderboard. What keeps a
+   three-site state at 0% from reading as a crisis is the site count beside it
+   and the bar going grey below the floor. */
 const STATE_MIN_SITES = 12;
+const STATE_ORDER = [["pct", "% mapped"], ["gap", "missing"]];
 
 function renderStateCoverage(sites) {
-  const host = $("statebars");
+  const host = $("staterail");
   if (!host) return;
+
+  seg("state-order", STATE_ORDER, VIEW.stateOrder, (k) => { VIEW.stateOrder = k; render(MERGED); });
+
   const agg = new Map();
   for (const s of sites) {
     if (!s.state || s.hostOnly) continue;
@@ -1158,29 +1174,30 @@ function renderStateCoverage(sites) {
     if (s.osm) e.m++; else { e.gap++; e.ports += s.ports || 0; }
     agg.set(s.state, e);
   }
-  const rows = [...agg].filter(([, a]) => a.n >= STATE_MIN_SITES)
-    .map(([code, a]) => ({ code, ...a, pct: (a.m / a.n) * 100 }))
-    .sort((a, b) => b.gap - a.gap)
-    .slice(0, 14);
+  const q = (VIEW.stateQuery || "").trim().toLowerCase();
+  const rows = [...agg]
+    .map(([code, a]) => ({ code, ...a, name: STATES?.[code]?.name || code, pct: (a.m / a.n) * 100 }))
+    .filter((r) => !q || r.code.toLowerCase().includes(q) || r.name.toLowerCase().includes(q))
+    .sort((a, b) => VIEW.stateOrder === "gap" ? b.gap - a.gap : a.pct - b.pct || b.n - a.n);
 
-  const hidden = agg.size - [...agg].filter(([, a]) => a.n >= STATE_MIN_SITES).length;
   const note = $("statemap-note");
   if (note) {
-    note.textContent =
-      `${VIEW.net ? VIEW.net + ", " : ""}states by unmapped sites. Bar is the count, ` +
-      `figure at right is percent mapped.` +
-      (hidden ? ` ${nf(hidden)} state${hidden === 1 ? "" : "s"} under ${STATE_MIN_SITES} sites left out.` : "");
+    note.textContent = VIEW.stateOrder === "gap"
+      ? `Sites with no station on OpenStreetMap. Bar is the share already mapped.`
+      : `Least mapped first. Bar and figure are the share already mapped; states under ${STATE_MIN_SITES} sites are greyed, being too small to rank.`;
   }
 
-  const max = Math.max(...rows.map((r) => r.gap), 1);
-  host.innerHTML = rows.map((r) => `
-    <button class="ab-rankrow${r.code === VIEW.state ? " is-on" : ""}" data-state="${r.code}"
-            title="${esc(STATES?.[r.code]?.name || r.code)} — ${nf(r.m)} of ${nf(r.n)} mapped, ${nf(r.ports)} ports missing">
-      <span class="num">${r.code}</span>
-      <span class="ab-rank-track"><span class="ab-rank-fill" style="width:${Math.max(1.5, (r.gap / max) * 100).toFixed(1)}%"></span></span>
-      <span class="num">${nf(r.gap)}</span>
-      <span class="num ab-rank-pct">${Math.round(r.pct)}%</span>
-    </button>`).join("");
+  host.innerHTML = rows.length
+    ? rows.map((r) => `
+      <button class="ab-state${r.code === VIEW.state ? " is-on" : ""}${r.n < STATE_MIN_SITES ? " is-thin" : ""}"
+              data-state="${r.code}"
+              title="${esc(r.name)} — ${nf(r.m)} of ${nf(r.n)} mapped, ${nf(r.gap)} missing, ${nf(r.ports)} ports">
+        <span class="ab-state-name"><span class="ab-state-code">${r.code}</span>${esc(r.name)}</span>
+        <span class="ab-state-n">${VIEW.stateOrder === "gap" ? nf(r.gap) : Math.round(r.pct) + "%"}</span>
+        <span class="ab-state-track"><span class="ab-state-fill" style="width:${r.pct.toFixed(1)}%"></span></span>
+      </button>`).join("")
+    : `<p class="ab-empty">No state matches that.</p>`;
+
   for (const b of host.querySelectorAll("[data-state]")) {
     b.onclick = () => {
       const sel = $("state-select");
@@ -1463,6 +1480,11 @@ function initControls() {
   if (q) {
     q.value = VIEW.query || "";
     q.oninput = () => { VIEW.query = q.value; safe("network rail", () => render(MERGED)); };
+  }
+  const sq = $("state-query");
+  if (sq) {
+    sq.value = VIEW.stateQuery || "";
+    sq.oninput = () => { VIEW.stateQuery = sq.value; safe("state rail", () => render(MERGED)); };
   }
 
   /* Clicking a state zooms into it; clicking the sea zooms back out. Both go
