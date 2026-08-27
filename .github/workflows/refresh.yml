@@ -1,4 +1,4 @@
-# Keeps data/ current without anyone opening a laptop.
+# Keeps data/ current and republishes the site, without anyone opening a laptop.
 #
 # Split by how fast each source actually moves. OpenStreetMap changes
 # continuously and is the one that matters — it is what the board measures
@@ -7,33 +7,48 @@
 # polite to a public endpoint. Everything else is re-fetched once a day, because
 # AFDC updates daily at best and All the Places runs weekly.
 #
+# This workflow also *deploys*, rather than leaving Pages to notice a new commit.
+# It has to: a push made with GITHUB_TOKEN deliberately does not trigger other
+# workflow runs, so with Pages set to "deploy from a branch" the data would land
+# in the repo every hour and the published site would never rebuild. Deploying
+# in the same run removes that dependency entirely.
+#
 # GitHub's schedules are best-effort: expect these to fire late, sometimes by
 # half an hour, and occasionally to be skipped under load. "Hourly" here means
 # "usually within the hour", which is the right accuracy for this data anyway.
-name: Refresh data
+name: Refresh and publish
 
 on:
   schedule:
     - cron: "7 * * * *"      # hourly, off the hour — the top of the hour is the busiest slot
     - cron: "23 5 * * *"     # daily, for the sources that do not move hourly
+  push:
+    branches: [main]          # publish edits to the board itself straight away
   workflow_dispatch:          # and a button, for when you have just mapped something
 
 concurrency:
-  group: refresh
+  group: pages
   cancel-in-progress: false   # let a running refresh finish rather than truncating a write
 
 permissions:
-  contents: write
+  contents: write             # to commit refreshed data back
+  pages: write                # to publish
+  id-token: write             # required by deploy-pages
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/configure-pages@v5
 
       - name: Refresh the daily sources
-        # Only on the daily schedule, or when run by hand.
+        # Skipped on the hourly tick; runs on the daily one, on a manual run,
+        # and on a push.
         if: github.event.schedule != '7 * * * *'
         env:
           # The only secret this repo needs. Without it AFDC falls back to
@@ -52,7 +67,21 @@ jobs:
           git config user.name  "refresh bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data
-          # No commit when nothing changed, so the history stays readable and
-          # Pages is not rebuilt for an identical site.
+          # No commit when nothing changed, so the history stays readable.
           git diff --staged --quiet || git commit -m "data: $(date -u +%Y-%m-%dT%H:%MZ)"
           git push
+
+      - name: Assemble the site
+        # Only what the board loads. `tools/` and the workflow itself are in the
+        # repo so the refresh can run; they are not part of what gets served.
+        run: |
+          mkdir -p _site
+          cp index.html osm-land.html app.js edit.js board-atlas.js .nojekyll _site/
+          cp -r data _site/data
+          du -sh _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
