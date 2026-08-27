@@ -884,6 +884,37 @@ function renderMethod(M, S) {
     `<div class="ab-method-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
 }
 
+/* What the refresh button actually did, said plainly.
+
+   Three different things wear the same button. On the local preview it rebuilds
+   the payloads from upstream and can fail. On a deployed board there is nothing
+   to rebuild — the scheduled job does that — so all the button can do is
+   re-read what has been published, bypassing the browser cache. Both are
+   useful; reporting one as the other is not.
+
+   "Already current" is a real answer, not a non-answer: it tells you the copy
+   you are looking at is the newest one published, which is exactly what someone
+   clicks refresh to find out. */
+function reportRefresh(rebuild, before, merged) {
+  const status = $("status");
+  if (!status) return;
+  if (rebuild.local && rebuild.ok === false) {
+    status.innerHTML =
+      `<span class="chip" style="color:var(--s2)">not refreshed</span> ` +
+      `${esc(rebuild.note || "the rebuild failed")} — the figures are the previous snapshot.`;
+    return;
+  }
+  if (rebuild.local) return;                    // the freshness line says the rest
+  /* Now that we know there is nothing to rebuild here, stop the button
+     promising it. Set once we have the answer rather than guessed at load. */
+  const btn = $("refresh");
+  if (btn) btn.title = "Check for newly published data";
+  const changed = before && before !== JSON.stringify(merged.stamps);
+  status.innerHTML = changed
+    ? `<span class="chip" style="color:var(--s3)">updated</span> ${freshness(merged.stamps)}`
+    : `<span class="chip">already current</span> ${freshness(merged.stamps)}`;
+}
+
 /* The status dot used to be green whatever had happened, which was untrue in
    two directions at once: reading saved payloads off disk is not a live fetch,
    and even a live fetch returns whatever Overpass last built, which can be
@@ -1361,19 +1392,22 @@ async function rebuildSnapshots() {
   // to wait to find out whether their last upload landed.
   const scope = VIEW.state ? `?state=${VIEW.state}` : "";
   const start = await fetch(`__refresh${scope}`, { method: "POST" }).catch(() => null);
-  if (!start || !start.ok) return false;
+  /* No endpoint means this is not the local preview — the board is on a static
+     host, where nothing can be re-polled from the browser. That is a different
+     answer from "the rebuild failed", and the button has to say which. */
+  if (!start || !start.ok) return { local: false };
   for (let i = 0; i < 600; i++) {
     await new Promise((r) => setTimeout(r, 1000));
     const state = await fetch("__refresh").then((r) => r.json()).catch(() => null);
-    if (!state) return false;
+    if (!state) return { local: true, ok: false, note: "the local refresh stopped answering" };
     if (state.note) $("status").innerHTML = `<span class="pulse pulse--wait"></span><span>${state.note}</span>`;
     /* `ok` is the rebuild's own verdict, and it is not the same question as
        whether the job stopped running. A refresh that died on its first line
        used to report success here, the board re-read the files it already had,
        and the only sign anything was wrong was that nothing changed. */
-    if (!state.running) return { ok: state.ok !== false, note: state.note || "" };
+    if (!state.running) return { local: true, ok: state.ok !== false, note: state.note || "" };
   }
-  return false;
+  return { local: true, ok: false, note: "the refresh is still running after ten minutes" };
 }
 
 async function load(fresh = false) {
@@ -1382,6 +1416,7 @@ async function load(fresh = false) {
     // Reported below rather than thrown: stale figures are still worth showing,
     // but not worth showing silently as if they were current.
     const rebuild = fresh ? await rebuildSnapshots() : null;
+    const before = MERGED ? JSON.stringify(MERGED.stamps) : null;
     const [afdc, tesla, ea, ionna, osm] = await Promise.all(
       ["/afdc", "/tesla", "/ea", "/ionna", "/osm"].map((p) => grab(p, fresh))
     );
@@ -1393,11 +1428,7 @@ async function load(fresh = false) {
     ATLAS_DIRTY = true;
     initControls();              // populate the selector first, independent of render
     render(merged);
-    if (rebuild && rebuild.ok === false) {
-      $("status").innerHTML =
-        `<span class="chip" style="color:var(--s2)">not refreshed</span> ` +
-        `${esc(rebuild.note || "the rebuild failed")} — the figures below are the previous snapshot.`;
-    }
+    if (rebuild) safe("refresh report", () => reportRefresh(rebuild, before, merged));
   } catch (e) {
     $("status").innerHTML = `<span class="chip" style="color:var(--s2)">error</span> ${e.message}`;
     $("dedupenote").innerHTML =
