@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signing in to OpenStreetMap…</title>
+<style>
+  body { margin: 0; display: grid; place-items: center; min-height: 100vh;
+         font: 15px/1.6 system-ui, sans-serif; background: #f3f1ed; color: #17150f; }
+  main { max-width: 34ch; padding: 24px; text-align: center; }
+  code { font-size: 13px; word-break: break-all; }
+  @media (prefers-color-scheme: dark) { body { background: #131211; color: #f6f1e9; } }
+</style>
+</head>
+<body>
+<main id="msg">Completing sign-in…</main>
+<script>
+  /* OAuth 2.0 redirect target for the "Make improvements" editor. It exists only
+     to hand the authorization code back to the board — keeping it out of the
+     board's own URL, and off the board's own (heavy) page load.
+
+     window.opener is null here, and will stay null: OSM sends
+     Cross-Origin-Opener-Policy: same-origin on its login and authorize pages,
+     which moves this popup into its own browsing context group on the way
+     through and severs the tie permanently. The board is still the same origin
+     as this page, though, so the code goes back over BroadcastChannel, with a
+     localStorage write behind it — a storage event reaches every other window
+     of the origin, whoever opened whom. The code is single-use and bound to a
+     PKCE verifier only the board holds, so neither channel gives anything away.
+
+     Cleared immediately by the board on receipt. */
+  const q = new URLSearchParams(location.search);
+  const payload = {
+    source: "cb-osm-auth",
+    code: q.get("code"),
+    state: q.get("state"),
+    error: q.get("error"),
+    description: q.get("error_description"),
+    at: Date.now(),
+  };
+
+  try { new BroadcastChannel("cb-osm-auth").postMessage(payload); } catch (e) { /* older browser */ }
+  try { localStorage.setItem("cb.osm.handoff", JSON.stringify(payload)); } catch (e) { /* private mode */ }
+  try { window.opener?.postMessage(payload, location.origin); } catch (e) { /* severed, as expected */ }
+
+  // A popup may refuse to close itself once COOP has re-parented it, so say
+  // something useful instead of leaving a blank page sitting there.
+  window.close();
+  setTimeout(() => {
+    document.getElementById("msg").innerHTML = payload.error
+      ? `Sign-in failed: <code>${payload.error}</code><br>Close this window and try again.`
+      : "Signed in. You can close this window — the board has carried on behind it.";
+  }, 400);
+</script>
+</body>
+</html>

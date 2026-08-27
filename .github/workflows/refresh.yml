@@ -1,0 +1,58 @@
+# Keeps data/ current without anyone opening a laptop.
+#
+# Split by how fast each source actually moves. OpenStreetMap changes
+# continuously and is the one that matters — it is what the board measures
+# itself against — so it runs hourly, and incrementally: `--since` asks Overpass
+# what changed rather than re-reading the country, which is a small query and
+# polite to a public endpoint. Everything else is re-fetched once a day, because
+# AFDC updates daily at best and All the Places runs weekly.
+#
+# GitHub's schedules are best-effort: expect these to fire late, sometimes by
+# half an hour, and occasionally to be skipped under load. "Hourly" here means
+# "usually within the hour", which is the right accuracy for this data anyway.
+name: Refresh data
+
+on:
+  schedule:
+    - cron: "7 * * * *"      # hourly, off the hour — the top of the hour is the busiest slot
+    - cron: "23 5 * * *"     # daily, for the sources that do not move hourly
+  workflow_dispatch:          # and a button, for when you have just mapped something
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false   # let a running refresh finish rather than truncating a write
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Refresh the daily sources
+        # Only on the daily schedule, or when run by hand.
+        if: github.event.schedule != '7 * * * *'
+        env:
+          # The only secret this repo needs. Without it AFDC falls back to
+          # DEMO_KEY, which is rate limited to a handful of calls an hour.
+          NLR_API_KEY: ${{ secrets.NLR_API_KEY }}
+        run: bun tools/refresh.js
+
+      - name: Ask OpenStreetMap what changed
+        run: |
+          SINCE=$(bun -e 'console.log(JSON.parse(require("fs").readFileSync("data/osm.json","utf8")).generated)')
+          echo "since $SINCE"
+          bun tools/refresh-osm.js --since="$SINCE"
+
+      - name: Commit whatever moved
+        run: |
+          git config user.name  "refresh bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          # No commit when nothing changed, so the history stays readable and
+          # Pages is not rebuilt for an identical site.
+          git diff --staged --quiet || git commit -m "data: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
