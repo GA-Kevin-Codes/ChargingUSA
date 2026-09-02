@@ -483,6 +483,18 @@ body.is-improving { overflow: hidden; }
 .imp-gear-q .ctl-label { opacity: .75; }
 .imp-gear-in .imp-chip { padding: 0 7px; font-size: 11px; }
 
+/* A checkbox that writes one tag. Wide hit area, because it is a claim about
+   the data and worth being easy to set — and easy to unset. */
+.imp-check {
+  display: flex; align-items: flex-start; gap: 9px; cursor: pointer;
+  margin: 12px 0 2px; padding: 9px 10px;
+  border: 1px solid var(--hairline); background: var(--sunken);
+  font-size: var(--t-small); color: var(--ink);
+}
+.imp-check:hover { border-color: var(--accent); }
+.imp-check input { margin: 2px 0 0; accent-color: var(--accent); flex: none; }
+.imp-check em { display: block; margin-top: 2px; font-style: normal; color: var(--muted); font-size: var(--t-micro); }
+
 /* The cabinet library: one click instead of six fields. */
 .imp-models { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 

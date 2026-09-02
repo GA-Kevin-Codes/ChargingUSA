@@ -1284,6 +1284,15 @@ const SOCKET = { CCS1: "type1_combo", "NACS / Tesla": "nacs", CHAdeMO: "chademo"
    ChargePoint unit in a hotel car park is operated by the hotel, not by
    ChargePoint — while the brand on the machine is exactly what they do know. */
 const WD_KEYS = new Set(["brand"]);
+
+/* What a mapper leaves behind when they can place a site but not pin it.
+
+   AFDC publishes one coordinate per site — a pylon, an entrance, the middle of
+   a forecourt — and imagery does not always show which. Saying so is worth more
+   than a silent guess: `fixme` is what the rest of OSM reads to find work that
+   needs a survey, so it turns an approximate node from a quiet inaccuracy into
+   an open question somebody can answer on the ground. */
+const FIXME_APPROX = "Location is approximate; needs a survey for precise location";
 const wikidataMemory = () => store.get(K.wikidata, {}) || {};
 function rememberWikidata(value, qid, label) {
   const m = wikidataMemory();
@@ -1851,6 +1860,19 @@ function upgradeCard(side) {
           </div>`;
         }).join("")}
       </div>
+      ${(() => {
+        /* Two sources counting the same forecourt. AFDC publishes a connector
+           breakdown; All the Places and supercharge.info publish a stall count
+           and are the reason those networks are overridden at all. Where the
+           two disagree the panel says so rather than picking one — the mapper
+           is the one who can see which is right, and neither number is worth
+           hiding to keep the arithmetic tidy. */
+        const sockets = Object.values(total).reduce((a, n) => a + n, 0);
+        if (!s.ports || !sockets || sockets === s.ports || s.src === "AFDC") return "";
+        return `<p class="imp-note imp-known">${esc(s.src)} counts ${nf(s.ports)} ports here;
+           AFDC's breakdown accounts for ${nf(sockets)}. The connectors below are AFDC's, the
+           port count is ${esc(s.src)}'s. Place what the imagery actually shows.</p>`;
+      })()}
       <p class="imp-note">${balanced ? `Every socket accounted for.`
         : `Still to place: ${esc(Object.entries(left).map(([k, n]) =>
              n > 0 ? `${nf(n)} ${k}` : `${nf(-n)} ${k} too many`).join(", "))}.`}${
@@ -2703,8 +2725,13 @@ const carPick = () => Math.min(CUR.carPick || 0, Math.max(0, (CUR.cars?.length |
 /* What the dealership route would write beside charging_station=yes, or
    nothing. One definition, read by both the button's label and the write, so
    the button cannot promise a tag the write then withholds. */
+/* Not gated on the source any more. `refs` is AFDC's numbering whichever feed
+   the rest of the site came from — an Electrify America record reunited with
+   its AFDC id has just as good a claim to write `ref:afdc` as one that arrived
+   from AFDC directly, and refusing it threw away the id the reunion existed to
+   recover. */
 const dealerRef = (s, poi) =>
-  s?.src === "AFDC" && s.refs?.length && poi && !poi.tags["ref:afdc"] ? s.refs.join(";") : null;
+  s?.refs?.length && poi && !poi.tags["ref:afdc"] ? s.refs.join(";") : null;
 
 const writeLabel = (d) =>
   d.pick.size ? `Add ${d.pick.size} tag${d.pick.size === 1 ? "" : "s"}` : "Nothing ticked";
@@ -2814,6 +2841,12 @@ function workCard(side) {
     </div>
     <div class="imp-tags" id="imp-tags"></div>
     <div class="imp-wd" id="imp-wd" hidden></div>
+
+    <label class="imp-check">
+      <input type="checkbox" id="imp-fixme"${CUR.tags.fixme === FIXME_APPROX ? " checked" : ""}>
+      <span>Location is approximate
+        <em>Adds <span class="mono">fixme</span> so somebody passing can pin it properly.</em></span>
+    </label>
     ${(s.refs?.length || 0) > 1 ? `<p class="imp-note"><span class="mono">ref:afdc</span> lists all
        ${nf(s.refs.length)} AFDC records this site was collapsed from — they share an address or
        stand within 80 m of each other. Trim it if the imagery shows two separate sites.</p>` : ""}
@@ -2834,6 +2867,17 @@ function workCard(side) {
 
   paintTags();
   bindShapeSwitch(side);
+  const fx = side.querySelector("#imp-fixme");
+  if (fx) {
+    fx.onchange = () => {
+      /* Only ever touches the value this box owns. A `fixme` the mapper typed
+         themselves, or one carried over from the element, is not ours to clear —
+         unticking removes the approximate-location note and nothing else. */
+      if (fx.checked) CUR.tags.fixme = FIXME_APPROX;
+      else if (CUR.tags.fixme === FIXME_APPROX) delete CUR.tags.fixme;
+      paintTags();
+    };
+  }
   side.querySelector("#imp-save").onclick = save;
   side.querySelector("#imp-skip").onclick = () => skip("skip");
   side.querySelector("#imp-add").onclick = () => addTag();

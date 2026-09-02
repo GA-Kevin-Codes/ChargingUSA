@@ -385,8 +385,20 @@ function merge(afdc, tesla, ea, ionna, osm) {
          discarding the record threw that id away with it. Reunited below. */
       for (const g of groups) {
         const base = g.reduce((a, b) => (b.ports > a.ports ? b : a));
+        /* The id was never the only thing worth keeping. AFDC also publishes
+           the connector breakdown, the open date and a street address, and the
+           source that replaces this record publishes none of them — so a
+           Electrify America site used to arrive with no socket detail, no open
+           date, and therefore no place in the openings queue at all. Set the
+           lot aside and let the reunion fill whatever the better source left
+           blank. */
         overridden.push({ net: disp(net), lat: base.lat, lon: base.lon,
-          refs: [...new Set(g.map((x) => x.id).filter((id) => id != null))].sort((a, b) => a - b) });
+          refs: [...new Set(g.map((x) => x.id).filter((id) => id != null))].sort((a, b) => a - b),
+          units: mergeUnits(g.flatMap((x) => x.units || [])),
+          open: g.map((x) => x.open).filter(Boolean).sort()[0] || null,
+          conf: g.map((x) => x.conf).filter(Boolean).sort().pop() || null,
+          city: base.city || null, street: base.street || null, fac: base.fac || null,
+          afdcPorts: g.reduce((a, b) => a + (b.ports || 0), 0) || null });
       }
       continue;
     }
@@ -535,6 +547,22 @@ function merge(afdc, tesla, ea, ionna, osm) {
         }
     if (!hit) continue;
     hit.refs = [...new Set([...(hit.refs || []), ...g.refs])].sort((a, b) => a - b);
+    /* Fill gaps only. All the Places and supercharge.info are here because they
+       are better on stalls and status, so `ports` is theirs and stays theirs —
+       what AFDC adds is everything they do not carry. Where both have a figure
+       the better source wins; where only AFDC has one, having it beats not. */
+    if (!hit.units?.length && g.units?.length) hit.units = g.units;
+    hit.open ??= g.open;
+    hit.conf ??= g.conf;
+    hit.city ??= g.city;
+    hit.street ??= g.street;
+    hit.fac ??= g.fac;
+    /* Kept apart from `ports` rather than reconciled with it. The two sources
+       count different things — AFDC counts what it was told, ATP counts what
+       the operator's own map shows today — and a panel that quietly averaged
+       them would be inventing a number neither publishes. The editor shows both
+       and says when they disagree. */
+    if (g.afdcPorts != null) hit.afdcPorts = g.afdcPorts;
     reunited++;
   }
 
