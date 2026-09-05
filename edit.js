@@ -2180,37 +2180,32 @@ async function createNote(lat, lon, text) {
   return { id, anonymous };
 }
 
-/* What the note says. Everything the board knows, laid out for somebody who
-   will be standing there with a phone — the network and size first, because
-   that is what they are looking for, then the identifiers that let them check
-   it against the source, then a plain statement of why this is a note and not
-   a mapped station. */
+/* What the note says.
+
+   One sentence of why, the tags themselves, and where they came from. The tags
+   are the ones this panel would have written had the pin been trustworthy, in
+   the form a mapper can read at a glance and copy straight into an editor —
+   which beats prose describing them, and means nothing the board knows is left
+   out because there was no sentence for it.
+
+   Not fenced as markdown: osm.org renders note text plain, so backticks would
+   arrive as backticks. A block of key=value lines is already unmistakable, and
+   short enough that a note reads at a glance rather than needing to be read.
+
+   The approximate-location `fixme` is dropped if it is there. The note is the
+   statement that this is unverified; saying it twice adds nothing. */
 function noteText(s, tags) {
-  const lines = [
-    `Charging station reported here, but I could not identify it from aerial imagery. Please survey.`,
-    ``,
-    `${s.net}${s.ports ? ` — ${s.ports} DC fast port${s.ports === 1 ? "" : "s"}` : ""}`,
-  ];
-  if (s.name) lines.push(`Name given as: ${s.name}`);
-  /* A state on its own is not an address — it is where the note already is.
-     Only worth a line when there is a street or a town in it. */
-  if (s.street || s.city) {
-    lines.push(`Address given as: ${[s.street, s.city, s.state].filter(Boolean).join(", ")}`);
-  }
+  const shown = Object.entries(tags || {})
+    .filter(([k, v]) => v !== "" && v != null && !(k === "fixme" && v === FIXME_APPROX))
+    .sort(([a], [b]) => a.localeCompare(b));
 
-  const sockets = Object.entries(tags || {})
-    .filter(([k]) => /^socket:[a-z0-9_]+$/.test(k))
-    .map(([k, v]) => `${k.slice(7)}=${v}`);
-  if (sockets.length) lines.push(`Connectors: ${sockets.join(", ")}`);
-  if (s.refs?.length) lines.push(`ref:afdc=${s.refs.join(";")}`);
-  if (s.open) lines.push(`Opened: ${s.open}`);
-
-  lines.push(
-    ``,
-    `Source: ${s.src}. The position is the operator's own coordinate for the site and`,
-    `may be some distance from the equipment. Left via the US Charging Board.`,
-  );
-  return lines.join("\n");
+  return [
+    "Charging station reported here, unable to verify on imagery.",
+    "",
+    ...shown.map(([k, v]) => `${k}=${v}`),
+    "",
+    `Source: ${s.src}`,
+  ].join("\n");
 }
 
 /* Create several nodes in one go. `uploadNode` answers for the one-node case
