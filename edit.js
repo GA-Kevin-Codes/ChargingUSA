@@ -35,11 +35,7 @@ const REDIRECT = new URL("osm-land.html", location.href).href;
 
 /* --------------------------------------------------------------- persistence */
 
-const store = {
-  get(k, d = null) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
-  del(k) { try { localStorage.removeItem(k); } catch { /* private mode */ } },
-};
+/* `store` lives in app.js — see the note on site identity there. */
 const K = {
   env: "cb.osm.env",
   client: (e) => `cb.osm.${e}.client`,
@@ -75,22 +71,10 @@ const session = () => store.get(K.token(envKey()));
    whatever the coordinate does. Reading matches on any of a site's keys, which
    is what keeps lists written before this from being quietly discarded, and
    what makes a site stay skipped when its cluster gains or loses a record. */
-const posKey = (s) => `${s.net}|${s.lat.toFixed(5)},${s.lon.toFixed(5)}`;
-/* Any published id the site has, in either register. Not gated on which source
-   the site came from any more: a Supercharger has supercharge.info's id and,
-   where AFDC lists it too, AFDC's — and either is steadier than the coordinate
-   the position key is built from. */
-const refKeys = (s) => [
-  ...(s.refs || []).map((r) => `afdc:${r}`),
-  ...(s.sc ? [`sc:${s.sc}`] : []),
-];
-const keyOf = (s) => refKeys(s)[0] || posKey(s);
-const keysOf = (s) => [posKey(s), ...refKeys(s)];
-const isRemembered = (set, s) => keysOf(s).some((k) => set.has(k));
-const remember = (bucket, s) => {
-  const list = store.get(bucket, []);
-  if (!list.includes(keyOf(s))) { list.push(keyOf(s)); store.set(bucket, list.slice(-4000)); }
-};
+/* `posKey`, `refKeys`, `keyOf`, `keysOf`, `isRemembered` and `remember` live in
+   app.js: the board applies this same memory to its own figures, and one
+   definition of "which site is this" beats two that can disagree about it. */
+
 
 /* ---------------------------------------------------------------------- auth */
 

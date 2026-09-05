@@ -76,7 +76,7 @@ jobs:
         # repo so the refresh can run; they are not part of what gets served.
         run: |
           mkdir -p _site
-          cp index.html osm-land.html app.js edit.js board-atlas.js .nojekyll _site/
+          cp index.html osm-land.html app.js edit.js board-atlas.js site-keys.js .nojekyll _site/
           cp -r data _site/data
           du -sh _site
 

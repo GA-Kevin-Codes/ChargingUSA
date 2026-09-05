@@ -359,6 +359,40 @@ function mergeUnits(rows) {
   return [...by.values()].sort((a, b) => b.n - a.n);
 }
 
+
+
+/* Work this browser has done that the snapshot has not caught up with.
+
+   A site mapped ten minutes ago is on OpenStreetMap; it is not in a snapshot
+   built an hour before that, and until the next refresh the board would go on
+   listing it as missing and offering it back in the queue. Counting it is the
+   honest reading: the question the figure asks is "is this on the map", not "is
+   this in our copy of the map".
+
+   Bounded by the snapshot's own age rather than kept for ever. Once the
+   snapshot is newer than the edit, the snapshot is the better witness and the
+   overlay steps aside — so a save that silently failed, or an object somebody
+   has since deleted, goes back to reading as missing instead of being masked
+   permanently by a claim this browser made once. */
+function localOverlay(sites, osmStamp) {
+  const done = rememberList(K_DONE).filter((e) => e.at > 0);
+  if (!done.length) return 0;
+  const snapshot = Date.parse(osmStamp || "") || 0;
+  const fresher = new Set(done.filter((e) => e.at > snapshot).map((e) => e.k));
+  if (!fresher.size) return 0;
+  let n = 0;
+  for (const s of sites) {
+    if (s.osm) continue;          // hostOnly implies osm, so this covers both
+    if (!keysOf(s).some((k) => fresher.has(k))) continue;
+    s.osm = true;
+    s.osmLocal = true;      // so the board can say how many are counted this way
+    n++;
+  }
+  return n;
+}
+// edit.js's bucket, named here because the board reads it too
+const K_DONE = "cb.improve.done";
+
 /* ---------------------------------------------------------------------- merge */
 
 function merge(afdc, tesla, ea, ionna, osm) {
@@ -623,8 +657,18 @@ function merge(afdc, tesla, ea, ionna, osm) {
     if (s.noted) noted++;
   }
 
+  /* Applied after the matcher has had its say, so it only ever promotes a site
+     the snapshot did not already account for. `mapped` is recounted rather than
+     incremented — the figure and the sites behind it have to agree. */
+  const localMapped = localOverlay(sites, osm.generated);
+  // Recounted exactly as the loop above counts it — host-mapped sites included,
+  // because `mapped` has always meant "s.osm is true" and a recount that meant
+  // something narrower would silently drop 563 of them.
+  if (localMapped) mapped = sites.filter((s) => s.osm).length;
+
   const business = sites.filter((s) => s.business).length;
   return { sites, pipeline, mapped, detailed, refMatched, noted, hostMapped, reunited, excluded, business, businessDeduped,
+           localMapped,
            osmTotal: osm.sites.length, osmDc: osm.sites.filter((o) => o.dc).length,
            osmStamp: osm.generated,
            // Every source dates itself differently and refreshes on its own
@@ -816,10 +860,16 @@ function render(M) {
 
   /* ---- figures ---- */
   const pct = (mapped / S.length) * 100;
+  // mapped in this browser, not yet visible in the snapshot behind the figures
+  const localHere = S.filter((s) => s.osmLocal).length;
   const kpis = [
     ["Sites", nf(S.length), VIEW.net || VIEW.state ? "in this slice" : "public DC fast charging", ""],
     ["DC ports", nf(ports), S.length ? `${(ports / S.length).toFixed(1)} per site` : "—", ""],
-    ["On the map", `${pct.toFixed(1)}%`, `${nf(mapped)} of ${nf(S.length)}`, ""],
+    /* The sub-line owns up to the overlay. A figure that quietly counted work
+       the snapshot cannot see would be the kind of number you stop trusting
+       once you notice — better to show it and say where it came from. */
+    ["On the map", `${pct.toFixed(1)}%`,
+     `${nf(mapped)} of ${nf(S.length)}${localHere ? ` · ${nf(localHere)} awaiting refresh` : ""}`, ""],
     ["Missing", nf(missing), "no station on OSM", "var(--accent)"],
     VIEW.net
       ? ["Share of US ports", `${((ports / nationalPorts) * 100).toFixed(1)}%`, `of ${nf(nationalPorts)}`, "var(--ink-2)"]
@@ -907,6 +957,7 @@ function renderMethod(M, S) {
     ["of those, DC-capable", nf(M.osmDc)],
     ["Matched on a published ref", nf(M.refMatched)],
     ["Noted on a host only", nf(M.noted)],
+    ...(M.localMapped ? [["Mapped here, awaiting refresh", nf(M.localMapped)]] : []),
   ];
   host.innerHTML = rows.map(([k, v]) =>
     `<div class="ab-method-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
