@@ -26,7 +26,11 @@ const ENVS = {
   dev: { label: "Dev sandbox", web: "https://api06.dev.openstreetmap.org", api: "https://api06.dev.openstreetmap.org" },
 };
 
-const SCOPES = "read_prefs write_api";
+/* `write_notes` is here for the Note button. It is the one scope an existing
+   token will not have, so the note write falls back to posting anonymously
+   rather than failing — an anonymous note still reaches the local mappers who
+   need it, which is the entire point of leaving one. */
+const SCOPES = "read_prefs write_api write_notes";
 const REDIRECT = new URL("osm-land.html", location.href).href;
 
 /* --------------------------------------------------------------- persistence */
@@ -44,6 +48,7 @@ const K = {
   pin: "cb.improve.pinLayer",
   done: "cb.improve.done",
   skip: "cb.improve.skip",
+  note: "cb.improve.note",
   mode: "cb.improve.mode",
   upDone: "cb.improve.up.done",
   upSkip: "cb.improve.up.skip",
@@ -2017,8 +2022,9 @@ function upgradeCard(side) {
 
     ${CUR.log?.length ? `<div class="imp-h">Changed this session</div>
       <div class="imp-log">${CUR.log.map((r) =>
-        `<div><a href="${ENV().web}/${r.type || "node"}/${r.id}" target="_blank" rel="noopener">${esc(r.name)}</a>
-          <span class="mono">#${r.cs}</span></div>`).join("")}</div>` : ""}
+        `<div><a href="${ENV().web}/${r.kind === "note" ? "note" : r.type || "node"}/${r.id}"
+           target="_blank" rel="noopener">${esc(r.name)}</a>
+          <span class="mono">${r.kind === "note" ? esc(r.cs) : `#${r.cs}`}</span></div>`).join("")}</div>` : ""}
 
     <div class="imp-error" id="imp-error" hidden></div>
     <div class="imp-actions">
@@ -2131,6 +2137,80 @@ function undoUpgrade() {
   if (u.tool === "outline") u.ring.pop(); else u.pts.pop();
   paintSide();
   MAP.schedule();
+}
+
+/* Leave a note where a station was reported but could not be confirmed.
+
+   The rung between skipping and mapping. Skipping says "I do not believe this";
+   a note says "something is reported here, I looked, and I could not tell from
+   above" — which is a genuinely useful thing to leave behind, because the next
+   person to pass does not repeat the search from nothing.
+
+   An OSM note rather than an unverified node on purpose. A node asserts a
+   station exists at a coordinate nobody has confirmed; a note asks a question
+   and adds no map data, which is exactly what the situation is. It also shows
+   up in every editor's note layer, so it reaches somebody local rather than
+   sitting in a database nobody queries. */
+async function createNote(lat, lon, text) {
+  const url = `${ENV().api}/api/0.6/notes?lat=${lat.toFixed(7)}&lon=${lon.toFixed(7)}&text=${encodeURIComponent(text)}`;
+  const s = session();
+
+  /* Deliberately not through `osmFetch`. That helper reads any 401 or 403 as a
+     dead token, clears it and demands a fresh sign-in — which is right for an
+     edit, and wrong here: a token that is perfectly good for the map but was
+     issued before `write_notes` was on the list returns exactly that 403. Going
+     through it would sign the mapper out of the editor for asking a question. */
+  let res = await fetch(url, {
+    method: "POST",
+    headers: s ? { Authorization: `Bearer ${s.access}` } : {},
+  });
+  let anonymous = false;
+  /* Scope missing, token otherwise fine. Post it without credentials rather
+     than sending them to their OAuth settings mid-queue — the note still lands
+     where it is needed, and the panel says which of the two happened so the
+     attribution is never implied. */
+  if (s && (res.status === 403 || res.status === 401)) {
+    res = await fetch(url, { method: "POST" });
+    anonymous = true;
+  }
+  if (!res.ok) throw new Error(`could not leave the note (${res.status})`);
+  const body = await res.text();
+  const id = body.match(/<id>(\d+)<\/id>/)?.[1]
+    || (() => { try { return JSON.parse(body).properties?.id; } catch { return null; } })();
+  return { id, anonymous };
+}
+
+/* What the note says. Everything the board knows, laid out for somebody who
+   will be standing there with a phone — the network and size first, because
+   that is what they are looking for, then the identifiers that let them check
+   it against the source, then a plain statement of why this is a note and not
+   a mapped station. */
+function noteText(s, tags) {
+  const lines = [
+    `Charging station reported here, but I could not identify it from aerial imagery. Please survey.`,
+    ``,
+    `${s.net}${s.ports ? ` — ${s.ports} DC fast port${s.ports === 1 ? "" : "s"}` : ""}`,
+  ];
+  if (s.name) lines.push(`Name given as: ${s.name}`);
+  /* A state on its own is not an address — it is where the note already is.
+     Only worth a line when there is a street or a town in it. */
+  if (s.street || s.city) {
+    lines.push(`Address given as: ${[s.street, s.city, s.state].filter(Boolean).join(", ")}`);
+  }
+
+  const sockets = Object.entries(tags || {})
+    .filter(([k]) => /^socket:[a-z0-9_]+$/.test(k))
+    .map(([k, v]) => `${k.slice(7)}=${v}`);
+  if (sockets.length) lines.push(`Connectors: ${sockets.join(", ")}`);
+  if (s.refs?.length) lines.push(`ref:afdc=${s.refs.join(";")}`);
+  if (s.open) lines.push(`Opened: ${s.open}`);
+
+  lines.push(
+    ``,
+    `Source: ${s.src}. The position is the operator's own coordinate for the site and`,
+    `may be some distance from the equipment. Left via the US Charging Board.`,
+  );
+  return lines.join("\n");
 }
 
 /* Create several nodes in one go. `uploadNode` answers for the one-node case
@@ -2337,6 +2417,10 @@ function candidatePool() {
   if (!MERGED) return [];
   const done = new Set(store.get(K.done, []));
   const skip = new Set(store.get(K.skip, []));
+  /* Noted sites leave the queue too — the work of looking has been done and
+     recorded. Kept apart from skips so the three outcomes stay tellable apart:
+     rejected, questioned, mapped. */
+  const noted = new Set(store.get(K.note, []));
   return MERGED.sites
     /* `noted` is out as well as `osm`. This is the queue's half of what the
        dealership route already assumes: a site whose charging is recorded on
@@ -2346,7 +2430,7 @@ function candidatePool() {
        machine and for whoever did the work. */
     .filter((s) => !s.osm && !s.noted && s.lat != null && s.lon != null)
     .filter((s) => !VIEW.net || s.net === VIEW.net)
-    .filter((s) => !isRemembered(done, s) && !isRemembered(skip, s));
+    .filter((s) => !isRemembered(done, s) && !isRemembered(skip, s) && !isRemembered(noted, s));
 }
 
 function candidates() {
@@ -2631,7 +2715,8 @@ function setupCard(side) {
       <ol class="imp-steps">
         <li>Open <a href="${ENV().web}/oauth2/applications/new" target="_blank" rel="noopener">${esc(ENV().web.replace("https://", ""))}/oauth2/applications/new</a>.</li>
         <li>Set the redirect URI to:<br><code class="imp-code">${esc(REDIRECT)}</code></li>
-        <li>Tick <b>Read user preferences</b> and <b>Modify the map</b>. Leave "confidential application" unticked.</li>
+        <li>Tick <b>Read user preferences</b>, <b>Modify the map</b> and
+            <b>Post notes</b>. Leave "confidential application" unticked.</li>
         <li>Paste the client id here.</li>
       </ol>
       <div class="imp-env-row">${envPicker()}</div>
@@ -2856,14 +2941,19 @@ function workCard(side) {
     <div class="imp-keys"><kbd>Enter</kbd> save · <kbd>S</kbd> skip · <kbd>Esc</kbd> close</div>
     ${CUR.log?.length ? `<div class="imp-h">Added this session</div>
       <div class="imp-log">${CUR.log.map((r) =>
-        `<div><a href="${ENV().web}/${r.type || "node"}/${r.id}" target="_blank" rel="noopener">${esc(r.name)}</a>
-          <span class="mono">#${r.cs}</span></div>`).join("")}</div>` : ""}
+        `<div><a href="${ENV().web}/${r.kind === "note" ? "note" : r.type || "node"}/${r.id}"
+           target="_blank" rel="noopener">${esc(r.name)}</a>
+          <span class="mono">${r.kind === "note" ? esc(r.cs) : `#${r.cs}`}</span></div>`).join("")}</div>` : ""}
 
     <div class="imp-error" id="imp-error" hidden></div>
     <div class="imp-actions">
       <button class="imp-primary" id="imp-save">Save &amp; next</button>
+      <button class="imp-ghost" id="imp-note" title="Leave an OpenStreetMap note at the pin for somebody to survey">Add note</button>
       <button class="imp-ghost" id="imp-skip">Skip</button>
-    </div>`;
+    </div>
+    <p class="imp-note imp-ladder"><b>Save</b> when the pin is right ·
+       <b>Add note</b> when something is reported here but you cannot see it ·
+       <b>Skip</b> when you think it is not there at all.</p>`;
 
   paintTags();
   bindShapeSwitch(side);
@@ -2879,6 +2969,7 @@ function workCard(side) {
     };
   }
   side.querySelector("#imp-save").onclick = save;
+  side.querySelector("#imp-note").onclick = leaveNote;
   side.querySelector("#imp-skip").onclick = () => skip("skip");
   side.querySelector("#imp-add").onclick = () => addTag();
   side.querySelector("#imp-mapped")?.addEventListener("click", () => skip("done"));
@@ -3469,6 +3560,41 @@ async function save() {
     // Do not leave a changeset open behind a failed upload; the next attempt
     // opens its own, and an abandoned one sits there for an hour otherwise.
     if (open) closeChangeset(open).catch(() => {});
+  } finally {
+    CUR.busy = false;
+  }
+}
+
+/* The middle rung. Writes no map data — see `createNote` for why — and takes
+   the site out of the queue the way a skip does, in its own bucket so the three
+   outcomes stay tellable apart later. */
+async function leaveNote() {
+  const s = CUR.site;
+  if (!s || CUR.busy || !CUR.pin) return;
+  CUR.busy = true;
+  const btn = $("imp-note");
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Leaving a note…";
+  try {
+    const { id, anonymous } = await createNote(CUR.pin.lat, CUR.pin.lon, noteText(s, CUR.tags));
+    remember(K.note, s);
+    CUR.saved++;
+    CUR.log = [{ id, cs: anonymous ? "anonymous" : "note", kind: "note",
+                 name: `note at ${s.name || s.net}` }, ...(CUR.log || [])].slice(0, 12);
+    if (anonymous) {
+      fail("Note left, but anonymously — your token predates the Post notes permission. " +
+           "Tick it on your OSM application and sign in again to have notes carry your name.");
+      btn.disabled = false;
+      btn.textContent = label;
+      CUR.busy = false;
+      return;
+    }
+    advance();
+  } catch (e) {
+    fail(e.message);
+    btn.disabled = false;
+    btn.textContent = label;
   } finally {
     CUR.busy = false;
   }
