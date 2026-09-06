@@ -393,6 +393,22 @@ function localOverlay(sites, osmStamp) {
 // edit.js's bucket, named here because the board reads it too
 const K_DONE = "cb.improve.done";
 
+/* Distinct source coordinates for one site.
+
+   Deduped at five decimals — about a metre. Two records naming the same spot
+   are one pin, not two stacked on each other; anything further apart is a real
+   disagreement and worth seeing. Capped because a handful of marks is context
+   and twenty is a mess, and ordered so the same source's marks sit together. */
+function sourcePins(list) {
+  const seen = new Map();
+  for (const p of list) {
+    if (p.lat == null || p.lon == null) continue;
+    const k = `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
+    if (!seen.has(k)) seen.set(k, p);
+  }
+  return [...seen.values()].slice(0, 8);
+}
+
 /* ---------------------------------------------------------------------- merge */
 
 function merge(afdc, tesla, ea, ionna, osm) {
@@ -428,6 +444,7 @@ function merge(afdc, tesla, ea, ionna, osm) {
            blank. */
         overridden.push({ net: disp(net), lat: base.lat, lon: base.lon,
           refs: [...new Set(g.map((x) => x.id).filter((id) => id != null))].sort((a, b) => a - b),
+          pins: sourcePins(g.map((x) => ({ lat: x.lat, lon: x.lon, src: "AFDC", ref: x.id }))),
           units: mergeUnits(g.flatMap((x) => x.units || [])),
           open: g.map((x) => x.open).filter(Boolean).sort()[0] || null,
           conf: g.map((x) => x.conf).filter(Boolean).sort().pop() || null,
@@ -459,6 +476,13 @@ function merge(afdc, tesla, ea, ionna, osm) {
            number of charge points there are to place. */
         units: mergeUnits(g.flatMap((x) => x.units || [])),
         conn: [...new Set(g.flatMap((x) => (x.conn || []).map((c) => CONN[c]).filter(Boolean)))],
+        /* Where each source put this site, kept rather than collapsed to one
+           point. A group is records within 80 m of each other or sharing an
+           address, so the spread is the width of a car park — which is exactly
+           the distance a mapper is trying to resolve. Showing all of them turns
+           "the data says here" into "these three disagree by 40 m, and the
+           imagery settles it". */
+        pins: sourcePins(g.map((x) => ({ lat: x.lat, lon: x.lon, src: "AFDC", ref: x.id }))),
       });
     }
   }
@@ -597,6 +621,15 @@ function merge(afdc, tesla, ea, ionna, osm) {
        them would be inventing a number neither publishes. The editor shows both
        and says when they disagree. */
     if (g.afdcPorts != null) hit.afdcPorts = g.afdcPorts;
+    /* Two sources, two coordinates, one forecourt. This is the pairing where
+       they disagree most — supercharge.info and All the Places aim at the
+       stalls, AFDC often at the site entrance — so carrying both is worth more
+       here than anywhere else. */
+    hit.pins = sourcePins([
+      ...(hit.pins || []),
+      { lat: hit.lat, lon: hit.lon, src: hit.src },
+      ...(g.pins || [{ lat: g.lat, lon: g.lon, src: "AFDC" }]),
+    ]);
     reunited++;
   }
 

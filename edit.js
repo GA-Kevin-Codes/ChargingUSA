@@ -76,6 +76,48 @@ const session = () => store.get(K.token(envKey()));
    definition of "which site is this" beats two that can disagree about it. */
 
 
+/* A source name short enough to sit on a map. The provenance strings are for
+   the method note, not for a label two centimetres wide. */
+/* Two coordinates for one site are worth comparing up to about a car park and
+   its neighbours. Past that they are not describing the same place. */
+const REF_PIN_MAX = 400;
+
+/* Where to open the map, given a site and the source marks around it.
+
+   One point: centre on it at z19, close enough to see individual stalls, which
+   is the zoom this panel has always used. Several: centre on the middle of them
+   and pull back only as far as it takes to hold them all with room to spare —
+   never past z16, because a view wide enough to lose the building is no help
+   in placing a pin against it. */
+function fitView(site, refs, W, H) {
+  const pts = [site, ...(refs || [])];
+  if (pts.length < 2 || !W || !H) return { lat: site.lat, lon: site.lon, zoom: 19 };
+  const lats = pts.map((p) => p.lat), lons = pts.map((p) => p.lon);
+  const lat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const lon = (Math.min(...lons) + Math.max(...lons)) / 2;
+  const k = Math.cos((lat * Math.PI) / 180);
+  // metres across, plus a third again so nothing sits on the edge
+  const wide = (Math.max(...lons) - Math.min(...lons)) * 111320 * k * 1.35;
+  const tall = (Math.max(...lats) - Math.min(...lats)) * 111320 * 1.35;
+  let zoom = 19;
+  while (zoom > 16) {
+    const mpp = (156543.03392 * k) / 2 ** zoom;   // metres per pixel at this zoom
+    if (wide <= W * mpp && tall <= H * mpp) break;
+    zoom -= 1;
+  }
+  return { lat, lon, zoom };
+}
+
+const sourceMark = (src) => {
+  const s = String(src || "");
+  if (/^AFDC/i.test(s)) return "AFDC";
+  if (/supercharge/i.test(s)) return "SC.info";
+  if (/electrify/i.test(s)) return "EA";
+  if (/ionna/i.test(s)) return "IONNA";
+  if (/^ATP/i.test(s)) return "ATP";
+  return s.slice(0, 8);
+};
+
 /* ---------------------------------------------------------------------- auth */
 
 const b64url = (buf) =>
@@ -840,6 +882,7 @@ class TileMap {
     this.cache = new Map();
     this.pin = null;          // {lat, lon} — draggable
     this.ghost = null;        // {lat, lon} — where the data said it was
+    this.refs = [];           // [{lat, lon, label}] — where each source said it was
     this.others = [];         // existing OSM stations nearby
     this.onpin = null;
     this.onstat = null;
@@ -1076,7 +1119,39 @@ class TileMap {
       ctx.beginPath(); ctx.arc(x, y, 2.4, 0, 6.284); ctx.fillStyle = cssv("--s3"); ctx.fill();
     }
 
-    if (this.ghost && this.pin) {
+    /* Every source's own coordinate for this site, so a disagreement between
+       them is visible rather than averaged away behind one mark. The pin the
+       mapper places is tethered to each, because the useful reading is not
+       where any single source put it but how far they are all from what the
+       imagery shows. Drawn as crosses: the pin is a place, these are claims. */
+    if (this.refs?.length && this.pin) {
+      const p = this.toPx(this.pin.lat, this.pin.lon);
+      ctx.font = "600 9px 'IBM Plex Mono', monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      for (const r of this.refs) {
+        const [x, y] = this.toPx(r.lat, r.lon);
+        ctx.strokeStyle = cssv("--s4");
+        ctx.setLineDash([3, 3]); ctx.lineWidth = 1.1;
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(p[0], p[1]); ctx.stroke();
+        ctx.setLineDash([]); ctx.globalAlpha = 1;
+
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(x - 4.5, y); ctx.lineTo(x + 4.5, y);
+        ctx.moveTo(x, y - 4.5); ctx.lineTo(x, y + 4.5);
+        ctx.stroke();
+        if (r.label) {
+          ctx.fillStyle = "rgba(14,13,13,.72)";
+          const w = ctx.measureText(r.label).width + 6;
+          ctx.fillRect(x - w / 2, y - 18, w, 11);
+          ctx.fillStyle = cssv("--s4");
+          ctx.fillText(r.label, x, y - 8);
+        }
+      }
+    } else if (this.ghost && this.pin) {
+      // one source, so there is nothing to compare — the original single mark
       const g = this.toPx(this.ghost.lat, this.ghost.lon);
       const p = this.toPx(this.pin.lat, this.pin.lon);
       ctx.strokeStyle = cssv("--s4");
@@ -2845,7 +2920,20 @@ function workCard(side) {
       <div class="imp-net">${brandMark(s.net)}${esc(s.net)}</div>
       <dl class="imp-facts">
         <dt>Ports</dt><dd>${nf(s.ports)}</dd>
-        <dt>Reported</dt><dd class="mono">${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}</dd>
+        <dt>Reported</dt><dd class="mono">${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}${
+          (() => {
+            /* Say what the crosses on the map are. A mark labelled "AFDC" 200 m
+               from the pin means nothing until something says the sources
+               disagree and by how much — and that spread is often the most
+               useful thing on the screen, because it is the size of the
+               question the imagery has to settle. */
+            const refs = MAP.refs || [];
+            if (refs.length < 2) return "";
+            const far = Math.max(...refs.map((r) => metres(s, r)));
+            const names = [...new Set(refs.map((r) => r.label))];
+            return `<span class="imp-spread">${nf(refs.length)} source marks, up to
+              ${nf(Math.round(far))} m apart${names.length > 1 ? ` · ${esc(names.join(" / "))}` : ""}</span>`;
+          })()}</dd>
         <dt>Source</dt><dd>${esc(s.src)}</dd>
         ${s.open ? `<dt>Opened</dt><dd>${esc(s.open)}</dd>` : ""}
       </dl>
@@ -3294,10 +3382,33 @@ async function show() {
   sel.value = String(CUR.layers.indexOf(CUR.layer));
 
   MAP.ghost = MODE() === "upgrade" ? null : { lat: s.lat, lon: s.lon };
+  /* Only worth drawing when the sources actually disagree. One pin and one
+     cross on the same spot is noise; two crosses forty metres apart is the
+     whole point. Labelled by source, shortened — "ATP electrify_america_us" is
+     the provenance string, not something to read off a map. */
+  MAP.refs = MODE() === "upgrade" || (s.pins?.length || 0) < 2 ? [] :
+    s.pins
+      /* Anything past this is not a second opinion about one forecourt, it is
+         a bad record — AFDC's address rule occasionally groups sites tens of
+         kilometres apart, and a tether line to one of those leaves the map and
+         teaches nothing. The pin stays in the data; it just is not drawn. */
+      .filter((p) => metres(s, p) <= REF_PIN_MAX)
+      .map((p) => ({ lat: p.lat, lon: p.lon, label: sourceMark(p.src) }));
+  if (MAP.refs.length < 2) MAP.refs = [];
   MAP.pin = MODE() === "upgrade" ? null : CUR.pin;
   MAP.others = [];
   MAP.setLayer(CUR.layer);
-  MAP.setView(s.lat, s.lon, 19);
+  /* Frame whatever has to be compared. Opening at a fixed z19 is right for one
+     coordinate and wrong the moment there are two: a second source 200 m away
+     sits well off the canvas, so the tether line runs to an edge and the mapper
+     is told there is a disagreement without being shown it. */
+  /* Measured off the element, not off `MAP.W` — those are set inside `draw`,
+     so on the first site of a session they are still zero and the fit would
+     quietly fall back to the fixed zoom it is meant to replace. */
+  const view = fitView(s, MAP.refs,
+    MAP.host?.clientWidth || MAP.W || 900,
+    MAP.host?.clientHeight || MAP.H || 600);
+  MAP.setView(view.lat, view.lon, view.zoom);
   paintAttr();
   paintPin();
   paintTrouble();
