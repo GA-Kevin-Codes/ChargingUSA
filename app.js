@@ -73,6 +73,22 @@ function brandMark(name) {
      ATP EA COMMERCIAL sites become access=customers — patrons of the host only.
      supercharge.info has no flag; a handful say so in free-text access notes.
    Excluded sites are counted and reported, never dropped silently. */
+/* Which `access` values from All the Places mean "not open to the public".
+
+   Named as a deny-list, deliberately. This was an allow-list — anything that
+   was not the string "public" was dropped — and when the spider started
+   emitting `access=yes` instead (which is the correct OSM value, so a fair
+   change on their part) it silently deleted 1,068 of the 1,099 Electrify
+   America sites. The board went on reporting confidently on a network that had
+   almost entirely vanished from it.
+
+   A deny-list fails the other way: a restriction value nobody has seen before
+   would let a private site through. That is the better failure — one wrong site
+   in a queue costs a wasted trip, a missing network costs the whole analysis —
+   and anything unrecognised is counted and reported rather than waved past. */
+const ATP_RESTRICTED = new Set(["customers", "private", "permit", "permissive", "no", "delivery"]);
+const ATP_OPEN = new Set(["public", "yes", "designated"]);
+
 const AFDC_BLOCKED_DETAIL = new Set(["KEY_ALWAYS"]);
 // A handful of AFDC records declare in their own name that they are not usable
 // — "NOT A PUBLIC SITE", "Private DCFC", "Test Site" — while still carrying
@@ -416,6 +432,10 @@ function merge(afdc, tesla, ea, ionna, osm) {
   let afdcRecords = afdc.sites.length, afdcSites = 0, cpRecords = 0, cpSites = 0;
 
   const excluded = { afdc: 0, ea: 0, tesla: 0 };
+
+  // access values no source has taught us to read — see ATP_RESTRICTED
+
+  const unknownAccess = new Set();
   const overridden = [];               // AFDC ids for networks a better source supplies
   const byNet = new Map();
   for (const s of afdc.sites) {
@@ -536,7 +556,10 @@ function merge(afdc, tesla, ea, ionna, osm) {
   }
   for (const p of ea.sites) {
     if (p.kind !== "site") continue;
-    if (p.access && p.access !== "public") { excluded.ea++; continue; }
+    if (p.access && ATP_RESTRICTED.has(p.access)) { excluded.ea++; continue; }
+    // Not known either way: kept, but counted so a vocabulary change shows up
+    // as a figure on the page instead of as a network quietly going missing.
+    if (p.access && !ATP_OPEN.has(p.access)) unknownAccess.add(p.access);
     sites.push({ net: "Electrify America", name: p.name, lat: p.lat, lon: p.lon, state: p.state,
       ports: units.get(String(p.ref)) || 1, open: null, conf: null, fac: null,
       src: "ATP electrify_america_us", conn: ["CCS1"], sockets: eaSockets.get(String(p.ref)) || {} });
@@ -702,6 +725,7 @@ function merge(afdc, tesla, ea, ionna, osm) {
   const business = sites.filter((s) => s.business).length;
   return { sites, pipeline, mapped, detailed, refMatched, noted, hostMapped, reunited, excluded, business, businessDeduped,
            localMapped,
+           unknownAccess: [...unknownAccess],
            osmTotal: osm.sites.length, osmDc: osm.sites.filter((o) => o.dc).length,
            osmStamp: osm.generated,
            // Every source dates itself differently and refreshes on its own
@@ -935,7 +959,12 @@ function render(M) {
     ["Dedupe", `${nf(D.afdcRecords)} AFDC records to ${nf(D.afdcSites)} sites. ChargePoint ${nf(D.cpRecords)} to ${nf(D.cpSites)}; every other network under 2%.`],
     ["OSM match", `${OSM_NEAR} m against ${nf(M.osmTotal)} mapped stations (${nf(M.osmDc)} with socket tags), widened by the size of any mapped area, or ${OSM_BRAND_NEAR} m for a match on the same operator — but never between two different networks, however close they stand. ${nf(M.refMatched)} sites skipped all of that and matched outright on a <span class="mono">ref:afdc</span> or <span class="mono">ref:supercharge_info</span> the mapper had already recorded.`],
     ["On a host", `Some charging is recorded on the business hosting it rather than mapped as a station. Where that business also carries the <span class="mono">ref:afdc</span> this site is listed under, it counts as mapped — ${nf(M.hostMapped)} sites. Where the tag stands alone it is only <i>noted</i>, and ${nf(M.noted)} sites sit there.`],
-    ["Excluded", `${nf(M.excluded.afdc)} gated or key-only, ${nf(M.excluded.ea)} customers-only, ${nf(M.excluded.tesla)} permit-only.`],
+    ["Excluded", `${nf(M.excluded.afdc)} gated or key-only, ${nf(M.excluded.ea)} customers-only, ${nf(M.excluded.tesla)} permit-only.` +
+      (M.unknownAccess?.length
+        ? ` A source is publishing <span class="mono">access</span> values this board does not
+           recognise — ${M.unknownAccess.map((v) => `<span class="mono">${esc(v)}</span>`).join(", ")} —
+           and those sites have been kept rather than dropped. Worth a look: the vocabulary has changed.`
+        : "")],
   ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
   const xn = $("xnote");
   if (xn) xn.innerHTML = "";
