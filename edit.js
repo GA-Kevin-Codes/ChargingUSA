@@ -696,6 +696,42 @@ function CAR_POI(t) {
   return !!(t.building || t.landuse || t.office) && MARQUES.test(name);
 }
 
+/* Notes already standing at this site, open or closed.
+
+   The queue's memory of what has been dealt with lives in this browser, which
+   is enough until it is not: a note left from another machine, or before
+   localStorage was cleared, or by somebody else entirely, is invisible to it —
+   so the same site comes round again and collects a second note saying the same
+   thing. The same reasoning that moved "already mapped" off localStorage and
+   onto the map applies here. Read it off the map.
+
+   Closed ones count. A resolved note means somebody went and looked, which is
+   more reason not to ask again, not less. `closed=-1` is the API's way of
+   saying "regardless of status" — the default would hide anything resolved
+   more than a week ago, which is exactly the case that bites. */
+async function notesNear(lat, lon, m = 150) {
+  const dLat = m / 111320;
+  const dLon = dLat / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+  const bbox = [lon - dLon, lat - dLat, lon + dLon, lat + dLat].map((v) => v.toFixed(6)).join(",");
+  const res = await fetch(`${ENV().api}/api/0.6/notes.json?bbox=${bbox}&closed=-1&limit=100`);
+  if (!res.ok) throw new Error(`notes ${res.status}`);
+  const body = await res.json();
+  const here = { lat, lon };
+  return (body.features || []).map((f) => {
+    const [flon, flat] = f.geometry.coordinates;
+    const c = f.properties.comments?.[0];
+    return {
+      id: f.properties.id,
+      open: f.properties.status === "open",
+      at: c?.date || "",
+      by: c?.user || null,
+      text: (c?.text || "").trim(),
+      lat: flat, lon: flon,
+      away: metres(here, { lat: flat, lon: flon }),
+    };
+  }).sort((a, b) => a.away - b.away);
+}
+
 async function nearbyStations(lat, lon, m = 250) {
   const dLat = m / 111320;
   const dLon = dLat / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
@@ -883,6 +919,7 @@ class TileMap {
     this.pin = null;          // {lat, lon} — draggable
     this.ghost = null;        // {lat, lon} — where the data said it was
     this.refs = [];           // [{lat, lon, label}] — where each source said it was
+    this.notes = [];          // [{lat, lon, open}] — notes already standing here
     this.others = [];         // existing OSM stations nearby
     this.onpin = null;
     this.onstat = null;
@@ -1117,6 +1154,23 @@ class TileMap {
       ctx.lineWidth = 2.4;
       ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.284); ctx.fill(); ctx.stroke();
       ctx.beginPath(); ctx.arc(x, y, 2.4, 0, 6.284); ctx.fillStyle = cssv("--s3"); ctx.fill();
+    }
+
+    /* Notes already standing here — the reason the Add note button may be off.
+       Drawn as a small square so it reads as a marker somebody placed rather
+       than a measurement, hollow when resolved. */
+    for (const n of this.notes || []) {
+      const [x, y] = this.toPx(n.lat, n.lon);
+      ctx.strokeStyle = cssv(n.open ? "--s4" : "--muted");
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.rect(x - 5, y - 5, 10, 10);
+      if (n.open) { ctx.fillStyle = "rgba(224,168,106,.22)"; ctx.fill(); }
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, y - 2.5); ctx.lineTo(x, y + 0.5);
+      ctx.moveTo(x, y + 2); ctx.lineTo(x, y + 3);
+      ctx.stroke();
     }
 
     /* Every source's own coordinate for this site, so a disagreement between
@@ -2920,6 +2974,11 @@ function diffCard(d) {
 }
 
 function workCard(side) {
+  /* Notes standing here already, whoever left them and whenever. Undefined while
+     the request is still out — the button stays live rather than flickering
+     disabled, because the common case is no note and a disabled button that
+     turns itself on reads as a bug. */
+  const noted = CUR.notes || [];
   const s = CUR.site;
   side.innerHTML = `
     <div class="imp-card imp-card--site">
@@ -3022,9 +3081,23 @@ function workCard(side) {
     <div class="imp-error" id="imp-error" hidden></div>
     <div class="imp-actions">
       <button class="imp-primary" id="imp-save">Save &amp; next</button>
-      <button class="imp-ghost" id="imp-note" title="Leave an OpenStreetMap note at the pin for somebody to survey">Add note</button>
+      <button class="imp-ghost" id="imp-note"${noted.length ? " disabled" : ""}
+              title="${noted.length ? "Somebody has already left a note here"
+                     : "Leave an OpenStreetMap note at the pin for somebody to survey"}">${
+        noted.length ? "Already noted" : "Add note"}</button>
       <button class="imp-ghost" id="imp-skip">Skip</button>
     </div>
+    ${noted.length ? `<div class="imp-noted">
+      <b>${nf(noted.length)} note${noted.length === 1 ? "" : "s"} already here</b>
+      ${noted.map((n) => `<div class="imp-noted-row">
+        <a href="${ENV().web}/note/${n.id}" target="_blank" rel="noopener" class="mono">#${n.id}</a>
+        <span class="${n.open ? "imp-noted-open" : "imp-noted-done"}">${n.open ? "open" : "resolved"}</span>
+        <span class="mono">${nf(Math.round(n.away))} m</span>
+        <span class="imp-noted-text">${esc(n.text.split("\n")[0].slice(0, 90))}</span>
+      </div>`).join("")}
+      <p class="imp-note">Adding another would say the same thing twice. Map it if you can
+         see it, or skip — the note already asks whoever passes to look.</p>
+    </div>` : ""}
     <p class="imp-note imp-ladder"><b>Save</b> when the pin is right ·
        <b>Add note</b> when something is reported here but you cannot see it ·
        <b>Skip</b> when you think it is not there at all.</p>`;
@@ -3366,6 +3439,8 @@ async function show() {
     MAP.grab = null;
     MAP.ongrab = null;
   }
+  CUR.notes = undefined;        // undefined = still asking, [] = asked, none found
+  MAP.notes = [];
   CUR.tags = proposeTags(s);
   CUR.raw = networkFor(s);        // names as proposed, before any relabelling
   CUR.pin = { lat: s.lat, lon: s.lon };
@@ -3424,6 +3499,17 @@ async function show() {
 
   // Non-blocking: the editor can start placing while this comes back.
   const forSite = s;
+  /* Asked for at the same time, so the panel is not waiting on two round trips
+     in series. A failure here must not block the edit — worst case the button
+     is offered when it should not have been, which is where this started. */
+  notesNear(s.lat, s.lon).then((notes) => {
+    if (CUR.site !== forSite) return;
+    CUR.notes = notes;
+    MAP.notes = notes;
+    MAP.schedule();
+    if (!$("imp-side")?.contains(document.activeElement)) paintSide();
+  }).catch(() => { CUR.notes = null; });
+
   nearbyStations(s.lat, s.lon).then(({ stations, cars }) => {
     if (CUR.site !== forSite) return;
     // Where each one started, so a nudge can be measured against it and put back
@@ -3674,6 +3760,21 @@ async function leaveNote() {
   btn.disabled = true;
   btn.textContent = "Leaving a note…";
   try {
+    /* Asked again here, immediately before writing. The card's copy was fetched
+       when the site was shown and the button can be clicked before it lands, or
+       after somebody else has left one in the meantime — and a duplicate note
+       is not something a later refresh can tidy up. Cheap, and exactly when it
+       matters. A failed check does not block: being unable to reach the notes
+       API is not evidence that a note exists. */
+    const standing = await notesNear(s.lat, s.lon).catch(() => []);
+    if (standing.length) {
+      CUR.notes = standing;
+      paintSide();
+      fail(`Note ${standing[0].open ? "" : "(resolved) "}#${standing[0].id} is already here, ` +
+           `${Math.round(standing[0].away)} m away. Nothing added.`);
+      CUR.busy = false;
+      return;
+    }
     const { id, anonymous } = await createNote(CUR.pin.lat, CUR.pin.lon, noteText(s, CUR.tags));
     remember(K.note, s);
     CUR.saved++;
