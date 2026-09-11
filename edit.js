@@ -1483,17 +1483,26 @@ function proposeTags(s) {
      NV". Neither is signage on the thing itself. The reported name is still
      shown on the card as context; it just is not a tag. */
 
-  if (s.ports > 0) t.capacity = String(s.ports);
+  /* Bays, not cables — see `siteBays`. A source's own port count is already a
+     bay count, so it is kept as the DC figure; the Level 2 pedestals AFDC
+     itemises are added to it, because a station holding both holds both and a
+     driver of either can park. Where a site is AFDC's alone the two agree by
+     construction: its `ev_dc_fast_num` is the count of its DC units. */
+  const bays = siteBays(s.units);
+  const capacity = (s.ports > 0 ? s.ports : bays.dc) + bays.ac;
+  if (capacity > 0) t.capacity = String(capacity);
 
   /* Per-connector counts where the source actually breaks them down. All the
      Places publishes one feature per charger for EA, IONNA states its mix
-     outright, and supercharge.info counts stalls by plug — so those give real
-     numbers rather than `yes`. AFDC only ever lists which connector types are
-     present alongside one total, so its sites can be split no further than a
-     single type taking the whole count. */
+     outright, and supercharge.info counts stalls by plug. AFDC gives a unit
+     breakdown, which is the same thing counted a different way — so it is read
+     first and the override source layered over whichever types it speaks for,
+     leaving AFDC's Level 2 rows in place rather than dropping them with the
+     rest. Only a site neither of them itemises falls back to `yes`. */
   const counted = Object.entries(s.sockets || {}).filter(([, n]) => Number(n) > 0);
-  if (counted.length) {
-    for (const [k, n] of counted) t[`socket:${k}`] = String(n);
+  const itemised = { ...unitSockets(s.units), ...Object.fromEntries(counted) };
+  if (Object.keys(itemised).length) {
+    for (const [k, n] of Object.entries(itemised)) t[`socket:${k}`] = String(n);
   } else {
     let sockets = [...new Set((s.conn || []).map((c) => SOCKET[c]).filter(Boolean))];
     if (!sockets.length && net.sockets) sockets = net.sockets;
@@ -1564,13 +1573,12 @@ const kindSockets = (kind) =>
    them. Only somebody looking at the site can. So this works out what must be
    accounted for, and the placing is left to say how it is grouped. */
 function siteSockets(units) {
-  const total = {}, powers = {};
+  const total = unitSockets(units);
+  const powers = {};
   for (const u of units || []) {
-    for (const [k, n] of Object.entries(u.conn || {})) {
+    for (const k of Object.keys(u.conn || {})) {
       const key = CONN_SOCKET[k];
-      if (!key) continue;
-      total[key] = (total[key] || 0) + n * u.n;
-      if (u.kw) (powers[key] ||= new Set()).add(u.kw);
+      if (key && u.kw) (powers[key] ||= new Set()).add(u.kw);
     }
   }
   return { total, powers: Object.fromEntries(
@@ -1594,10 +1602,19 @@ function socketsDone(placed, existing) {
 
 /* A starting configuration: one of whichever connector the site has most of, at
    its highest power. The commonest cabinet is a single cable, so that is the
-   guess that needs the least correcting. */
+   guess that needs the least correcting.
+
+   DC first where the site has any. Sorting the whole list by count let Level 2
+   win on the 796 mixed sites where the posts outnumber the cabinets, so the
+   first dispenser offered on a DC board was a type 1 lead — and at Denver
+   International, a household socket. The fast hardware is what brought the site
+   into the queue, so it is what the mapper is sent to place first; the Level 2
+   rows are still listed and still have to be accounted for. */
 function defaultCfg(units) {
   const { total, powers } = siteSockets(units);
-  const first = Object.entries(total).sort((a, b) => b[1] - a[1])[0];
+  const rank = Object.entries(total)
+    .sort((a, b) => (DC_SOCKET.has(b[0]) - DC_SOCKET.has(a[0])) || b[1] - a[1]);
+  const first = rank[0];
   if (!first) return { conn: {}, kw: {} };
   return { conn: { [first[0]]: 1 }, kw: { [first[0]]: powers[first[0]]?.[0] ?? null } };
 }
@@ -1624,7 +1641,6 @@ const cfgLabel = (cfg) => {
    delivers this much. */
 function pointTags(cfg, gear = null, from = null) {
   const t = { man_made: "charge_point" };
-  let cables = 0;
   let dc = false;
   for (const [key, n] of Object.entries(cfg.conn || {})) {
     if (!n) continue;
@@ -1636,10 +1652,17 @@ function pointTags(cfg, gear = null, from = null) {
     const volts = withUnit(gear?.voltage, "V");
     if (amps) t[`socket:${key}:current`] = amps;
     if (volts) t[`socket:${key}:voltage`] = volts;
-    cables += n;
     if (DC_SOCKET.has(key)) dc = true;
   }
-  t.capacity = String(cables);
+  /* How many cars this cabinet serves at once, which is not how many cables
+     hang off it. Two connector types side by side are alternatives — a driver
+     takes the CCS or the CHAdeMO, never both — so a twin-head dispenser is one
+     bay. Two of the same type are two bays, because nothing stops a second car
+     using the second cable. The largest single-type count is therefore the
+     answer: 1× CCS + 1× NACS is one, 2× CCS is two, and 2× CCS + 2× CHAdeMO is
+     a cabinet of two twin-head bays. */
+  const bays = Math.max(0, ...Object.values(cfg.conn || {}).map((n) => n || 0));
+  t.capacity = String(bays);
   // DC is mains frequency zero — the one technical fact about a fast charger
   // that never needs looking up
   if (dc) t.frequency = "0";
@@ -1766,16 +1789,15 @@ function gearSummary(g) {
    match how far its mapper got is worse than one that states the site. */
 function stationTags(base, units) {
   const t = normaliseUnits(base);
-  const totals = {}, kw = {};
-  let cables = 0, dc = false;
+  const totals = unitSockets(units);
+  const kw = {};
+  let dc = false;
   for (const u of units) {
     for (const [k, n] of Object.entries(u.conn || {})) {
       const key = CONN_SOCKET[k];
       if (!key) continue;
-      totals[key] = (totals[key] || 0) + n * u.n;
       // the strongest of a kind, which is what a site is judged on
       if (u.kw && u.kw > (kw[key] || 0)) kw[key] = u.kw;
-      cables += n * u.n;
       if (DC_SOCKET.has(key)) dc = true;
     }
   }
@@ -1783,7 +1805,16 @@ function stationTags(base, units) {
     t[`socket:${key}`] = String(n);
     if (kw[key]) t[`socket:${key}:output`] = withUnit(kw[key], "kW");
   }
-  if (cables) t.capacity = String(cables);
+  /* Bays, not cables — see `siteBays`. Summing the sockets counted a twin-head
+     dispenser as two cars and a site of them as twice its real capacity, and
+     Level 2 pedestals rode in on the same total, so a site with seven DC
+     cabinets behind fifty-six posts claimed a capacity of seventy.
+
+     Both halves still count: a station that holds Level 2 and DC holds both,
+     and a driver of either can park. What changed is that each pedestal is
+     worth one car rather than one cable. */
+  const bays = siteBays(units);
+  if (bays.total) t.capacity = String(bays.total);
   if (dc) t.frequency = "0";
   return t;
 }
@@ -1968,16 +1999,21 @@ function upgradeCard(side) {
         }).join("")}
       </div>
       ${(() => {
-        /* Two sources counting the same forecourt. AFDC publishes a connector
+        /* Two sources counting the same forecourt. AFDC publishes a unit
            breakdown; All the Places and supercharge.info publish a stall count
            and are the reason those networks are overridden at all. Where the
            two disagree the panel says so rather than picking one — the mapper
            is the one who can see which is right, and neither number is worth
-           hiding to keep the arithmetic tidy. */
-        const sockets = Object.values(total).reduce((a, n) => a + n, 0);
-        if (!s.ports || !sockets || sockets === s.ports || s.src === "AFDC") return "";
+           hiding to keep the arithmetic tidy.
+
+           Bays against ports, not cables against ports. A stall count and a
+           cable count differ on every twin-head site by definition, so
+           comparing those two cried disagreement on forecourts where the
+           sources agree perfectly well. */
+        const bays = siteBays(s.units).dc;
+        if (!s.ports || !bays || bays === s.ports || s.src === "AFDC") return "";
         return `<p class="imp-note imp-known">${esc(s.src)} counts ${nf(s.ports)} ports here;
-           AFDC's breakdown accounts for ${nf(sockets)}. The connectors below are AFDC's, the
+           AFDC itemises ${nf(bays)}. The connectors below are AFDC's, the
            port count is ${esc(s.src)}'s. Place what the imagery actually shows.</p>`;
       })()}
       <p class="imp-note">${balanced ? `Every socket accounted for.`

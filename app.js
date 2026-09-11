@@ -1183,6 +1183,40 @@ const CONN_SOCKET = {
 };
 const DC_SOCKET = new Set(["type1_combo", "chademo", "nacs"]);
 
+/* A bay is one vehicle charging, which is exactly what OSM's `capacity` counts,
+   and AFDC's charging unit is the same thing. A cabinet offering CHAdeMO and
+   CCS hands the driver a choice of cable, not a second place to park, so its
+   two connectors are one bay.
+
+   Checked against the whole feed rather than assumed: summing `n` over a site's
+   DC units reproduces AFDC's own `ev_dc_fast_num` on 14,895 of 14,898 sites,
+   where summing their connectors manages 9,373. The unit is the bay; the
+   connector count never is. Counting cables is how a site of twin-head
+   dispensers ends up claiming twice the capacity it has — which is most of a
+   network like EV Gateway, whose DC fleet is nearly all CHAdeMO+CCS. */
+const isDcUnit = (u) =>
+  Object.keys(u.conn || {}).some((k) => DC_SOCKET.has(CONN_SOCKET[k]));
+
+function siteBays(units) {
+  let dc = 0, ac = 0;
+  for (const u of units || []) { if (isDcUnit(u)) dc += u.n; else ac += u.n; }
+  return { dc, ac, total: dc + ac };
+}
+
+/* Sockets, unlike bays, are counted per cable: a twin-head cabinet really does
+   carry one CHAdeMO and one CCS, and `socket:*` is where that belongs. Both
+   numbers are wanted and they are not the same number. */
+function unitSockets(units) {
+  const total = {};
+  for (const u of units || []) {
+    for (const [k, n] of Object.entries(u.conn || {})) {
+      const key = CONN_SOCKET[k];
+      if (key) total[key] = (total[key] || 0) + n * u.n;
+    }
+  }
+  return total;
+}
+
 /* ------------------------------------------------------------- export
 
    The unmapped list, as GeoJSON, for working somewhere other than here — JOSM,
@@ -1198,13 +1232,8 @@ const DC_SOCKET = new Set(["type1_combo", "chademo", "nacs"]);
    this passes it straight through, so the geometry is a lead, not a survey. */
 function missingGeoJSON(sites, scope) {
   const features = sites.map((s) => {
-    const sockets = {};
-    for (const u of s.units || []) {
-      for (const [k, n] of Object.entries(u.conn || {})) {
-        const key = CONN_SOCKET[k];
-        if (key) sockets[`socket:${key}`] = (sockets[`socket:${key}`] || 0) + n * u.n;
-      }
-    }
+    const sockets = Object.fromEntries(
+      Object.entries(unitSockets(s.units)).map(([k, n]) => [`socket:${k}`, n]));
     const kw = Math.max(0, ...(s.units || []).map((u) => u.kw || 0));
     return {
       type: "Feature",
