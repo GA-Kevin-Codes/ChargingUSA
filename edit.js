@@ -1329,8 +1329,7 @@ const NETWORKS = {
   "Circle K": { brand: "Circle K" },
   "Francis Energy": { brand: "Francis Energy" },
   "Electric Era": { brand: "Electric Era" },
-  "Rivian Adventure": { brand: "Rivian Adventure Network" },
-  "Rivian Waypoints": { brand: "Rivian Waypoints" },
+  Rivian: { brand: "Rivian Adventure Network" },
   "Red E": { brand: "Red E" },
   Independent: {},                              // nothing trustworthy to name
 };
@@ -1403,9 +1402,17 @@ function proposeTags(s) {
      string the next site of this network arrives with. */
   const put = (k, v) => {
     if (!v) return;
+    /* The brand table wins on `brand:wikidata`. It is curated per company and
+       shipped with the board, where `recallWikidata` only knows what this
+       browser has confirmed by hand — so the table answers on the first site of
+       a network somebody has never opened, which is exactly when it matters.
+       The remembered entry still supplies the spelling, and still answers for
+       anything the table has no row for. */
+    const known = k === "brand" ? brandQid(s.net) : null;
     const hit = WD_KEYS.has(k) ? recallWikidata(v) : null;
     t[k] = hit?.label || v;
-    if (hit) t[`${k}:wikidata`] = hit.qid;
+    const qid = known || hit?.qid;
+    if (qid) t[`${k}:wikidata`] = qid;
   };
   put("operator", net.operator);
   put("brand", net.brand);

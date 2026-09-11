@@ -308,7 +308,12 @@ tbody tr:hover td { background: var(--sunken); }
 .sort-mark { font-size: var(--t-micro); opacity: .85; }
 
 /* ---------- brand marks ---------- */
-.bmark { width: 16px; height: 16px; flex: none; display: inline-block; vertical-align: -3px; margin-right: 8px; border-radius: 4px; object-fit: contain; background: var(--surface); }
+/* Marks are SVG now, and their aspect ratios vary — a wordmark is wide, a
+   roundel is square. `contain` in a fixed box keeps them all on one optical
+   size without stretching any of them, and the box stays transparent because
+   the -dark variants are drawn for this ground. */
+.bmark { width: 18px; height: 16px; flex: none; display: inline-block; vertical-align: -3px; margin-right: 8px; object-fit: contain; object-position: center; }
+.mono-mark { border-radius: 4px; background: var(--surface); }
 .mono-mark {
   font-family: "IBM Plex Mono", monospace; font-size: 9.5px; line-height: 16px;
   text-align: center; font-weight: 600;

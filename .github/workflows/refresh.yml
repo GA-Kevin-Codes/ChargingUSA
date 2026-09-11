@@ -77,6 +77,7 @@ jobs:
         run: |
           mkdir -p _site
           cp index.html osm-land.html app.js edit.js board-atlas.js site-keys.js .nojekyll _site/
+          cp -r icons _site/icons
           cp -r data _site/data
           du -sh _site
 

@@ -8,14 +8,22 @@ const DATA_SUFFIX = window.DATA_SUFFIX || "";
 const OVERRIDE = new Set(["Tesla", "Electrify America", "IONNA"]);
 const LIVE = new Set(["OPEN", "EXPANDING"]);
 const CONN = { J1772COMBO: "CCS1", TESLA: "NACS / Tesla", CHADEMO: "CHAdeMO", J1772: "J1772 (AC)" };
-const DISPLAY = {
-  "eVgo Network": "EVgo", "ChargePoint Network": "ChargePoint", "Blink Network": "Blink",
-  RED_E: "Red E", FORD_CHARGE: "Blue Oval", FCN: "Francis Energy", FPLEV: "FPL EVolution",
-  RIVIAN_ADVENTURE: "Rivian Adventure", EVGATEWAY: "EV Gateway", SHELL_RECHARGE: "Shell Recharge",
-  BP_PULSE: "bp pulse", CIRCLE_K: "Circle K", ELECTRIC_ERA: "Electric Era", "7CHARGE": "7-Eleven",
-  CHARGELAB: "ChargeLab", RIVIAN_WAYPOINTS: "Rivian Waypoints", "Non-Networked": "Independent",
-};
-const disp = (k) => DISPLAY[k] ?? (k.includes("_") ? k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : k);
+/* Display names, marks and Wikidata ids all come from data/brands.json, which
+   is built from the icons folder by tools/build-brands.js. It is one table
+   because they are one fact: what this company is called, what its mark looks
+   like, and which Wikidata item it is. Keeping the label in a rename map and
+   the mark in a separate lookup is how "Chargesmart Ev" ends up printed beside
+   the ChargeSmart logo.
+
+   The fallback survives a missing or half-loaded table: shouted, underscored
+   feed names are still worth title-casing rather than printing raw. */
+const disp = (k) =>
+  BRANDS?.nets?.[k] ?? (k.includes("_") ? k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : k);
+
+/* The Wikidata item for a network, for the editor to write as `brand:wikidata`
+   without anyone looking it up. Null where the company has no item — four of
+   them do not, and inventing one would be worse than leaving the tag off. */
+const brandQid = (net) => BRANDS?.brands?.[net]?.qid ?? BRANDS?.brands?.[disp(net)]?.qid ?? null;
 
 // ATP spider status per network, as of the 2026-08-01 weekly run. "ok" = producing
 // features; "broken" = spider exists but returned zero; absent = no spider written.
@@ -55,7 +63,7 @@ const hostOf = (name) => {
 let BRANDS = {};
 const MONO_HUES = [210, 24, 158, 42, 280, 340, 190, 100];
 function brandMark(name) {
-  const src = BRANDS[name];
+  const src = BRANDS?.brands?.[name]?.icon;
   if (src) {
     return `<img class="bmark" src="${src}" alt="" loading="lazy" decoding="async">`;
   }
