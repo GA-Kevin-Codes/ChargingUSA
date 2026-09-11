@@ -2282,6 +2282,25 @@ async function createNote(lat, lon, text) {
   return { id, anonymous };
 }
 
+/* Does this site look like it sits at a car dealership nobody has mapped?
+
+   AFDC's own `facility_type` is the signal worth trusting — 428 sites say
+   CAR_DEALER outright. The name is a weaker one and only used where AFDC has
+   no opinion: 5,625 site names match a marque, and most of those are a
+   Supercharger at a shopping centre rather than a forecourt, so a name alone
+   would ask the wrong question of thousands of sites.
+
+   Only meaningful when nothing is mapped to tag. Where the dealership is
+   already on the map the panel has a better offer — put the tags on it — and
+   that button is a few lines further down. */
+const DEALER_FAC = "CAR_DEALER";
+function looksLikeDealer(s) {
+  if (s.fac === DEALER_FAC) return true;
+  if (s.fac) return false;
+  const name = s.name || "";
+  return MARQUES.test(name) && !MARQUE_STREET.test(name);
+}
+
 /* What the note says.
 
    One sentence of why, the tags themselves, and where they came from. The tags
@@ -2296,13 +2315,27 @@ async function createNote(lat, lon, text) {
 
    The approximate-location `fixme` is dropped if it is there. The note is the
    statement that this is unverified; saying it twice adds nothing. */
-function noteText(s, tags) {
+function noteText(s, tags, kind = "site") {
   const shown = Object.entries(tags || {})
     .filter(([k, v]) => v !== "" && v != null && !(k === "fixme" && v === FIXME_APPROX))
     .sort(([a], [b]) => a.localeCompare(b));
 
+  /* The dealership variant asks for something different, so it says something
+     different. The generic note asks somebody to find a charger; this one says
+     the charger is the evidence and the building is what is missing — which is
+     a larger and more useful edit, and one the tags below cannot express on
+     their own. `ref:afdc` is named explicitly because it is what lets this
+     board see the site has been dealt with. */
+  const head = kind === "dealer"
+    ? ["This building has a charging station in it. It is likely a car dealership",
+       "that is missing from the map.",
+       "",
+       "Once it has been added, please put charging_station=yes and",
+       `${s.refs?.length ? `ref:afdc=${s.refs.join(";")}` : "ref:afdc=*"} on the dealership.`]
+    : ["Charging station reported here, unable to verify on imagery."];
+
   return [
-    "Charging station reported here, unable to verify on imagery.",
+    ...head,
     "",
     ...shown.map(([k, v]) => `${k}=${v}`),
     "",
@@ -3031,6 +3064,17 @@ function workCard(side) {
         </button>
       </div>` : ""}
 
+    ${!CUR.cars?.length && looksLikeDealer(s) ? `
+      <div class="imp-poi">
+        <b>${s.fac === DEALER_FAC ? "AFDC calls this a car dealership" : "This looks like a car dealership"}</b>
+        <p class="imp-note">Nothing is mapped here to put the charging on. If the imagery shows a
+           dealership, the useful edit is the building — a note asks for that, and for the tags
+           that would let this board see it afterwards.</p>
+        <button class="imp-ghost imp-poi-alt" id="imp-note-dealer">
+          Instead: note that the dealership is missing
+        </button>
+      </div>` : ""}
+
     ${shapeSwitch(CUR.up || { shape: "node" })}
 
     <div class="imp-tags-head">
@@ -3085,7 +3129,8 @@ function workCard(side) {
     };
   }
   side.querySelector("#imp-save").onclick = save;
-  side.querySelector("#imp-note").onclick = leaveNote;
+  side.querySelector("#imp-note").onclick = () => leaveNote("site");
+  side.querySelector("#imp-note-dealer")?.addEventListener("click", () => leaveNote("dealer"));
   side.querySelector("#imp-skip").onclick = () => skip("skip");
   side.querySelector("#imp-add").onclick = () => addTag();
   side.querySelector("#imp-mapped")?.addEventListener("click", () => skip("done"));
@@ -3746,11 +3791,11 @@ async function save() {
 /* The middle rung. Writes no map data — see `createNote` for why — and takes
    the site out of the queue the way a skip does, in its own bucket so the three
    outcomes stay tellable apart later. */
-async function leaveNote() {
+async function leaveNote(kind = "site") {
   const s = CUR.site;
   if (!s || CUR.busy || !CUR.pin) return;
   CUR.busy = true;
-  const btn = $("imp-note");
+  const btn = $(kind === "dealer" ? "imp-note-dealer" : "imp-note");
   const label = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Leaving a note…";
@@ -3774,11 +3819,12 @@ async function leaveNote() {
       advance();
       return;
     }
-    const { id, anonymous } = await createNote(CUR.pin.lat, CUR.pin.lon, noteText(s, CUR.tags));
+    const { id, anonymous } = await createNote(CUR.pin.lat, CUR.pin.lon, noteText(s, CUR.tags, kind));
     remember(K.note, s);
     CUR.saved++;
     CUR.log = [{ id, cs: anonymous ? "anonymous" : "note", kind: "note",
-                 name: `note at ${s.name || s.net}` }, ...(CUR.log || [])].slice(0, 12);
+                 name: `${kind === "dealer" ? "dealership note" : "note"} at ${s.name || s.net}` },
+               ...(CUR.log || [])].slice(0, 12);
     if (anonymous) {
       fail("Note left, but anonymously — your token predates the Post notes permission. " +
            "Tick it on your OSM application and sign in again to have notes carry your name.");
