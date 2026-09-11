@@ -919,7 +919,6 @@ class TileMap {
     this.pin = null;          // {lat, lon} — draggable
     this.ghost = null;        // {lat, lon} — where the data said it was
     this.refs = [];           // [{lat, lon, label}] — where each source said it was
-    this.notes = [];          // [{lat, lon, open}] — notes already standing here
     this.others = [];         // existing OSM stations nearby
     this.onpin = null;
     this.onstat = null;
@@ -1154,23 +1153,6 @@ class TileMap {
       ctx.lineWidth = 2.4;
       ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.284); ctx.fill(); ctx.stroke();
       ctx.beginPath(); ctx.arc(x, y, 2.4, 0, 6.284); ctx.fillStyle = cssv("--s3"); ctx.fill();
-    }
-
-    /* Notes already standing here — the reason the Add note button may be off.
-       Drawn as a small square so it reads as a marker somebody placed rather
-       than a measurement, hollow when resolved. */
-    for (const n of this.notes || []) {
-      const [x, y] = this.toPx(n.lat, n.lon);
-      ctx.strokeStyle = cssv(n.open ? "--s4" : "--muted");
-      ctx.lineWidth = 1.8;
-      ctx.beginPath();
-      ctx.rect(x - 5, y - 5, 10, 10);
-      if (n.open) { ctx.fillStyle = "rgba(224,168,106,.22)"; ctx.fill(); }
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x, y - 2.5); ctx.lineTo(x, y + 0.5);
-      ctx.moveTo(x, y + 2); ctx.lineTo(x, y + 3);
-      ctx.stroke();
     }
 
     /* Every source's own coordinate for this site, so a disagreement between
@@ -2792,10 +2774,13 @@ function paintProgress() {
   if (!p) return;
   const scope = [VIEW.net, VIEW.state].filter(Boolean).join(" · ");
   const done = CUR.saved ? ` · <span class="imp-saved">${nf(CUR.saved)} added this session</span>` : "";
+  /* Said out loud, because a queue that advances by itself with no explanation
+     reads as a glitch. These are sites somebody had already asked about. */
+  const noted = CUR.noted ? ` · ${nf(CUR.noted)} already noted, skipped` : "";
   p.innerHTML = !CUR.queue.length ? ""
     : CUR.site ? `<b>${nf(CUR.at + 1)}</b> of ${nf(CUR.queue.length)} ${
         MODE() === "upgrade" ? "mapped as a node" : "unmapped"}${scope ? ` in ${esc(scope)}` : ""}${
-        VIEW.impOpen != null ? `, opened in ${nf(VIEW.impOpen)} days` : ""}${done}`
+        VIEW.impOpen != null ? `, opened in ${nf(VIEW.impOpen)} days` : ""}${done}${noted}`
     : `queue finished${done}`;
 }
 
@@ -2974,11 +2959,6 @@ function diffCard(d) {
 }
 
 function workCard(side) {
-  /* Notes standing here already, whoever left them and whenever. Undefined while
-     the request is still out — the button stays live rather than flickering
-     disabled, because the common case is no note and a disabled button that
-     turns itself on reads as a bug. */
-  const noted = CUR.notes || [];
   const s = CUR.site;
   side.innerHTML = `
     <div class="imp-card imp-card--site">
@@ -3081,23 +3061,12 @@ function workCard(side) {
     <div class="imp-error" id="imp-error" hidden></div>
     <div class="imp-actions">
       <button class="imp-primary" id="imp-save">Save &amp; next</button>
-      <button class="imp-ghost" id="imp-note"${noted.length ? " disabled" : ""}
-              title="${noted.length ? "Somebody has already left a note here"
-                     : "Leave an OpenStreetMap note at the pin for somebody to survey"}">${
-        noted.length ? "Already noted" : "Add note"}</button>
+      <button class="imp-ghost" id="imp-note" title="Leave an OpenStreetMap note at the pin for somebody to survey">Add note</button>
       <button class="imp-ghost" id="imp-skip">Skip</button>
     </div>
-    ${noted.length ? `<div class="imp-noted">
-      <b>${nf(noted.length)} note${noted.length === 1 ? "" : "s"} already here</b>
-      ${noted.map((n) => `<div class="imp-noted-row">
-        <a href="${ENV().web}/note/${n.id}" target="_blank" rel="noopener" class="mono">#${n.id}</a>
-        <span class="${n.open ? "imp-noted-open" : "imp-noted-done"}">${n.open ? "open" : "resolved"}</span>
-        <span class="mono">${nf(Math.round(n.away))} m</span>
-        <span class="imp-noted-text">${esc(n.text.split("\n")[0].slice(0, 90))}</span>
-      </div>`).join("")}
-      <p class="imp-note">Adding another would say the same thing twice. Map it if you can
-         see it, or skip — the note already asks whoever passes to look.</p>
-    </div>` : ""}
+    ${CUR.notedStop ? `<p class="imp-note imp-halt">Stopped advancing on its own:
+       ${nf(AUTO_SKIP_MAX)} sites in a row already had a note, and so does this one.
+       It has been remembered either way, so Skip carries on without seeing it again.</p>` : ""}
     <p class="imp-note imp-ladder"><b>Save</b> when the pin is right ·
        <b>Add note</b> when something is reported here but you cannot see it ·
        <b>Skip</b> when you think it is not there at all.</p>`;
@@ -3385,6 +3354,9 @@ const MODE = () => (store.get(K.mode) === "upgrade" ? "upgrade" : "add");
 async function start() {
   CUR.queue = MODE() === "upgrade" ? upgrades() : candidates();
   CUR.at = 0;
+  CUR.noted = 0;
+  CUR.notedRun = 0;
+  CUR.notedStop = false;
   paintModes();
   CUR.log = CUR.log || [];
   await loadImagery();
@@ -3439,8 +3411,7 @@ async function show() {
     MAP.grab = null;
     MAP.ongrab = null;
   }
-  CUR.notes = undefined;        // undefined = still asking, [] = asked, none found
-  MAP.notes = [];
+
   CUR.tags = proposeTags(s);
   CUR.raw = networkFor(s);        // names as proposed, before any relabelling
   CUR.pin = { lat: s.lat, lon: s.lon };
@@ -3502,13 +3473,33 @@ async function show() {
   /* Asked for at the same time, so the panel is not waiting on two round trips
      in series. A failure here must not block the edit — worst case the button
      is offered when it should not have been, which is where this started. */
+  /* A note standing here means somebody has already asked the question this
+     site would be offered for. Rather than showing that and making it read,
+     move on — and remember it, so the lookup is not repeated on every pass.
+
+     The memory bucket is the one the Add note button writes to. It means "there
+     is a note here" either way; whose note it is does not change what should
+     happen to the site. */
   notesNear(s.lat, s.lon).then((notes) => {
     if (CUR.site !== forSite) return;
-    CUR.notes = notes;
-    MAP.notes = notes;
-    MAP.schedule();
-    if (!$("imp-side")?.contains(document.activeElement)) paintSide();
-  }).catch(() => { CUR.notes = null; });
+    // a site that stands is the end of any run of skipped ones
+    if (!notes.length) { CUR.notedRun = 0; return; }
+    remember(K.note, s);
+    CUR.noted = (CUR.noted || 0) + 1;
+    /* A region where everything is noted, or a notes API answering oddly,
+       must not spin the queue. After a run of them, stop and say so. */
+    if (CUR.notedRun >= AUTO_SKIP_MAX) {
+      /* Held on CUR rather than written straight to the error box: the nearby
+         stations arrive after this and repaint the card, and a message that
+         only lives in the DOM would be wiped by the repaint that follows it. */
+      CUR.notedRun = 0;
+      CUR.notedStop = true;
+      paintSide();
+      return;
+    }
+    CUR.notedRun = (CUR.notedRun || 0) + 1;
+    advance();
+  }).catch(() => { /* unreachable notes API is not evidence of a note */ });
 
   nearbyStations(s.lat, s.lon).then(({ stations, cars }) => {
     if (CUR.site !== forSite) return;
@@ -3534,6 +3525,9 @@ function fail(msg) {
   box.textContent = msg;
 }
 
+/* How many noted sites the queue will step over before it stops on its own. */
+const AUTO_SKIP_MAX = 25;
+
 function advance() {
   CUR.at++;
   show();
@@ -3542,6 +3536,7 @@ function advance() {
 function skip(kind) {
   const s = CUR.site;
   if (!s) return;
+  CUR.notedStop = false;
   // each mode remembers separately: a site dealt with as unmapped has not been
   // dealt with as a node that wants an outline, and vice versa
   if (MODE() === "upgrade") remember(kind === "done" ? K.upDone : K.upSkip, s);
@@ -3768,11 +3763,15 @@ async function leaveNote() {
        API is not evidence that a note exists. */
     const standing = await notesNear(s.lat, s.lon).catch(() => []);
     if (standing.length) {
-      CUR.notes = standing;
-      paintSide();
+      /* Reachable only through a race — a note left between this site being
+         shown and the button being pressed. The site is remembered and stepped
+         over, the same as if the check had come back before it was offered. */
+      remember(K.note, s);
       fail(`Note ${standing[0].open ? "" : "(resolved) "}#${standing[0].id} is already here, ` +
-           `${Math.round(standing[0].away)} m away. Nothing added.`);
+           `${Math.round(standing[0].away)} m away. Nothing added — moving on.`);
       CUR.busy = false;
+      CUR.noted = (CUR.noted || 0) + 1;
+      advance();
       return;
     }
     const { id, anonymous } = await createNote(CUR.pin.lat, CUR.pin.lon, noteText(s, CUR.tags));

@@ -496,14 +496,8 @@ body.is-improving { overflow: hidden; }
 /* How far apart the sources put this site — the size of the question. */
 .imp-spread { display: block; margin-top: 3px; font-family: Archivo, system-ui, sans-serif; color: var(--s4); }
 
-/* Notes already standing at this site — why Add note may be unavailable. */
-.imp-noted { margin: 12px 0 2px; padding: 10px; border: 1px solid var(--s4); background: var(--sunken); }
-.imp-noted > b { display: block; font-size: var(--t-small); color: var(--ink); margin-bottom: 7px; }
-.imp-noted-row { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-micro); margin-bottom: 4px; }
-.imp-noted-open { color: var(--s4); }
-.imp-noted-done { color: var(--muted); }
-.imp-noted-text { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.imp-noted .imp-note { margin: 6px 0 0; }
+/* The queue stopped stepping over noted sites by itself. */
+.imp-halt { color: var(--s4); border-left: 2px solid var(--s4); padding-left: 9px; }
 
 /* A checkbox that writes one tag. Wide hit area, because it is a claim about
    the data and worth being easy to set — and easy to unset. */
