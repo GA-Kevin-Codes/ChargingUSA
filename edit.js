@@ -2316,26 +2316,36 @@ function looksLikeDealer(s) {
    The approximate-location `fixme` is dropped if it is there. The note is the
    statement that this is unverified; saying it twice adds nothing. */
 function noteText(s, tags, kind = "site") {
+  /* Two notes asking for two different things, so they carry two different tag
+     blocks — and the dealership one carries only the pair it names.
+
+     The site's own tags describe a charging station: amenity, capacity, sockets.
+     On a dealership they would be wrong, and a block sitting under "please put
+     these on the dealership" is an invitation to paste all of it — which would
+     turn a shop=car into something claiming to be a charging station with three
+     socket types. The charger itself is what the note is standing on; what is
+     missing is the building. */
+  if (kind === "dealer") {
+    return [
+      "This building has a charging station in it. It is likely a car dealership",
+      "that is missing from the map.",
+      "",
+      "Once it has been added, please put these two on the dealership:",
+      "",
+      "charging_station=yes",
+      `ref:afdc=${s.refs?.length ? s.refs.join(";") : "*"}`,
+      "",
+      ...(s.name ? [`Reported as: ${s.name}`] : []),
+      `Source: ${s.src}`,
+    ].join("\n");
+  }
+
   const shown = Object.entries(tags || {})
     .filter(([k, v]) => v !== "" && v != null && !(k === "fixme" && v === FIXME_APPROX))
     .sort(([a], [b]) => a.localeCompare(b));
 
-  /* The dealership variant asks for something different, so it says something
-     different. The generic note asks somebody to find a charger; this one says
-     the charger is the evidence and the building is what is missing — which is
-     a larger and more useful edit, and one the tags below cannot express on
-     their own. `ref:afdc` is named explicitly because it is what lets this
-     board see the site has been dealt with. */
-  const head = kind === "dealer"
-    ? ["This building has a charging station in it. It is likely a car dealership",
-       "that is missing from the map.",
-       "",
-       "Once it has been added, please put charging_station=yes and",
-       `${s.refs?.length ? `ref:afdc=${s.refs.join(";")}` : "ref:afdc=*"} on the dealership.`]
-    : ["Charging station reported here, unable to verify on imagery."];
-
   return [
-    ...head,
+    "Charging station reported here, unable to verify on imagery.",
     "",
     ...shown.map(([k, v]) => `${k}=${v}`),
     "",
