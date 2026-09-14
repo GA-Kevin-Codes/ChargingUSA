@@ -688,6 +688,11 @@ body.is-improving { overflow: hidden; }
 }
 .imp-link:hover { text-decoration: underline; }
 .imp-actions { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
+/* The add card's footer carries four outcomes: save on a row of its own, and the
+   three ways of not saving side by side beneath it, in the order of the ladder. */
+.imp-actions--add { grid-template-columns: repeat(3, 1fr); }
+.imp-actions--add .imp-primary { grid-column: 1 / -1; }
+.imp-actions--add .imp-ghost { padding-inline: 8px; white-space: nowrap; }
 .imp-h { font-family: "IBM Plex Mono", monospace; font-size: var(--t-micro); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
 .imp-tags-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
@@ -1201,7 +1206,7 @@ body.is-improving { overflow: hidden; }
 </div>
 <script src="site-keys.js?v=1"></script>
 <script src="board-atlas.js?v=atlas1"></script>
-<script src="app.js?v=e409a971"></script>
-<script src="edit.js?v=e409a971"></script>
+<script src="app.js?v=8f6a4a34"></script>
+<script src="edit.js?v=8f6a4a34"></script>
 </body>
 </html>

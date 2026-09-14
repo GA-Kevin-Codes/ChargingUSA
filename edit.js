@@ -3114,11 +3114,8 @@ function workCard(side) {
       <div class="imp-poi">
         <b>${s.fac === DEALER_FAC ? "AFDC calls this a car dealership" : "This looks like a car dealership"}</b>
         <p class="imp-note">Nothing is mapped here to put the charging on. If the imagery shows a
-           dealership, the useful edit is the building — a note asks for that, and for the tags
-           that would let this board see it afterwards.</p>
-        <button class="imp-ghost imp-poi-alt" id="imp-note-dealer">
-          Instead: note that the dealership is missing
-        </button>
+           dealership, the useful edit is the building — <b>Dealership note</b>, below, asks for
+           that, and for the tags that would let this board see it afterwards.</p>
       </div>` : ""}
 
     ${shapeSwitch(CUR.up || { shape: "node" })}
@@ -3149,9 +3146,16 @@ function workCard(side) {
           <span class="mono">${r.kind === "note" ? esc(r.cs) : `#${r.cs}`}</span></div>`).join("")}</div>` : ""}
 
     <div class="imp-error" id="imp-error" hidden></div>
-    <div class="imp-actions">
+    ${/* The dealership note sits beside the generic one on every site, not only
+         the ones `looksLikeDealer` recognises. That test is deliberately narrow —
+         a name alone would mistake thousands of shopping-centre Superchargers for
+         forecourts — so it misses dealerships AFDC files under no facility type
+         or a name without a marque. The mapper looking at the imagery is the
+         better judge, and should not need the heuristic's permission. */ ""}
+    <div class="imp-actions imp-actions--add">
       <button class="imp-primary" id="imp-save">Save &amp; next</button>
       <button class="imp-ghost" id="imp-note" title="Leave an OpenStreetMap note at the pin for somebody to survey">Add note</button>
+      <button class="imp-ghost" id="imp-note-dealer" title="Leave a note asking for the dealership to be mapped, with charging_station=yes and ref:afdc">Dealership note</button>
       <button class="imp-ghost" id="imp-skip">Skip</button>
     </div>
     ${CUR.notedStop ? `<p class="imp-note imp-halt">Stopped advancing on its own:
@@ -3159,6 +3163,7 @@ function workCard(side) {
        It has been remembered either way, so Skip carries on without seeing it again.</p>` : ""}
     <p class="imp-note imp-ladder"><b>Save</b> when the pin is right ·
        <b>Add note</b> when something is reported here but you cannot see it ·
+       <b>Dealership note</b> when it is inside a dealership nobody has mapped ·
        <b>Skip</b> when you think it is not there at all.</p>`;
 
   paintTags();
@@ -3176,7 +3181,7 @@ function workCard(side) {
   }
   side.querySelector("#imp-save").onclick = save;
   side.querySelector("#imp-note").onclick = () => leaveNote("site");
-  side.querySelector("#imp-note-dealer")?.addEventListener("click", () => leaveNote("dealer"));
+  side.querySelector("#imp-note-dealer").onclick = () => leaveNote("dealer");
   side.querySelector("#imp-skip").onclick = () => skip("skip");
   side.querySelector("#imp-add").onclick = () => addTag();
   side.querySelector("#imp-mapped")?.addEventListener("click", () => skip("done"));
