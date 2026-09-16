@@ -285,6 +285,12 @@ async function tesla(env) {
 }
 
 // All the Places publishes weekly under a dated run id, so resolve it first.
+/* Upstream having nothing to give is not the same as this code failing, and
+   the two want different outcomes: one keeps yesterday's file and carries on,
+   the other should stop and be looked at. Callers read `.soft` to tell them
+   apart. */
+const soft = (msg) => Object.assign(new Error(`atp ${msg}`), { soft: true });
+
 async function atp(env, spider) {
   const latest = await fetch("https://data.alltheplaces.xyz/runs/latest.json");
   if (!latest.ok) throw new Error(`atp index ${latest.status}`);
@@ -293,7 +299,26 @@ async function atp(env, spider) {
     `https://alltheplaces-data.openaddresses.io/runs/${run_id}/output/${spider}.geojson`
   );
   if (!res.ok) throw new Error(`atp ${spider} ${res.status}`);
-  const body = await res.json();
+
+  /* A run that produced nothing is served as 200 with an empty body, not as a
+     404 — so `res.ok` passes and the parse yields null, and reading `.features`
+     off it threw a TypeError naming an internal variable. That is upstream
+     having no answer this week, not this code being broken, so it is marked
+     `soft`: the caller keeps the file it already has and says so, rather than
+     failing the run and stopping everything downstream with it.
+
+     Read as text first. `res.json()` on an empty body is not portable — it
+     throws in some runtimes and returns null in others — and the distinction
+     between "published nothing" and "published something unreadable" is worth
+     keeping, because only the first is normal. */
+  const text = await res.text();
+  if (!text.trim()) throw soft(`${spider}: run ${run_id} published an empty file`);
+  let body;
+  try { body = JSON.parse(text); }
+  catch { throw new Error(`atp ${spider}: run ${run_id} output is not JSON`); }
+  if (!Array.isArray(body?.features)) {
+    throw soft(`${spider}: run ${run_id} output has no features`);
+  }
   return {
     source: `All the Places · ${spider}`,
     run: run_id,

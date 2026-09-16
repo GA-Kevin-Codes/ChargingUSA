@@ -53,19 +53,41 @@ for (const [name, label, fn] of JOBS) {
        has answered 200 with nothing in it at some point — an upstream mid-
        deploy, a spider that ran and found no matches — and a board showing
        zero sites is worse than one showing yesterday's. */
-    if (!rows) throw new Error("came back with no rows");
+    if (!rows) throw Object.assign(new Error("came back with no rows"), { soft: true });
     writeFileSync(`${OUT}/${name}.json.new`, JSON.stringify(payload));
     renameSync(`${OUT}/${name}.json.new`, `${OUT}/${name}.json`);
     const size = statSync(`${OUT}/${name}.json`).size;
     console.log(`${name}: ${rows} rows · ${(size / 1e6).toFixed(2)} MB` +
                 (before ? ` (was ${(before / 1e6).toFixed(2)} MB)` : ""));
   } catch (e) {
-    failed.push(`${name}: ${e.message}`);
-    console.log(`${name}: FAILED — ${e.message} · kept the previous file`);
+    failed.push({ name, message: e.message, soft: !!e.soft });
+    console.log(`${name}: ${e.soft ? "NOTHING UPSTREAM" : "FAILED"} — ${e.message} · kept the previous file`);
   }
 }
 report("");
+
+/* Two kinds of not-refreshing, and only one of them is a problem here.
+
+   A source that published nothing this week has left us with the file we
+   already had, which is the designed outcome — the board shows last week's
+   IONNA rather than no IONNA. Exiting non-zero for that failed the whole job,
+   and every step after this one — the OpenStreetMap refresh, the commit, the
+   deploy — never ran. One weekly spider coming back empty would quietly stop
+   the site updating at all, which is far worse than the stale file it was
+   trying to protect against.
+
+   So an empty upstream is an annotation on the run and nothing more. A real
+   failure — a 5xx, unreadable output, a missing key — still exits 1. */
 if (failed.length) {
-  console.log(`\n${failed.length} of ${JOBS.length} did not refresh:\n  ${failed.join("\n  ")}`);
-  process.exit(1);
+  const hard = failed.filter((f) => !f.soft);
+  const soft = failed.filter((f) => f.soft);
+  console.log(`\n${failed.length} of ${JOBS.length} did not refresh:\n  ` +
+    failed.map((f) => `${f.name}: ${f.message}`).join("\n  "));
+  // GitHub surfaces these on the run summary; harmless noise anywhere else.
+  for (const f of soft) {
+    console.log(`::warning title=${f.name} not refreshed::${f.message} — kept the previous file`);
+  }
+  if (hard.length) process.exit(1);
+  console.log(`\nNothing upstream for ${soft.map((f) => f.name).join(", ")}; ` +
+              `the previous data stands and the run carries on.`);
 }
