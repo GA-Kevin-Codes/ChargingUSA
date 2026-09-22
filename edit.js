@@ -2484,9 +2484,8 @@ async function saveUpgrade() {
                 : u.pts.length ? `Add charge points`
                 : `Reposition charge points from imagery`) +
         `${base.brand ? ` (${base.brand})` : ""}${s.state ? ` in ${s.state}` : ""}`,
-      source: CUR.layer ? CUR.layer.name : "aerial imagery",
+      source: s.src,
       imagery_used: CUR.layer ? CUR.layer.name : "aerial imagery",
-      "charge_board:lead": s.src,
     }));
 
     const log = [];
