@@ -3697,8 +3697,7 @@ async function writeNear() {
     const cs = (open = await createChangeset({
       created_by: `${APP} ${VERSION}`,
       comment: `Add detail to charging station${tags.brand ? ` (${tags.brand})` : ""}${s.state ? ` in ${s.state}` : ""}`,
-      source: "operator data",
-      "charge_board:lead": s.src,
+      source: s.src,
     }));
     if (btn) btn.textContent = "Uploading…";
     // The version the human actually reviewed. If it moved while they read, the
@@ -3754,9 +3753,8 @@ async function tagDealership() {
     const cs = (open = await createChangeset({
       created_by: `${APP} ${VERSION}`,
       comment: `Note charging at ${poi.tags.name || "car dealership"}${s.state ? ` in ${s.state}` : ""}`,
-      source: CUR.layer ? CUR.layer.name : "aerial imagery",
+      source: s.src,
       imagery_used: CUR.layer ? CUR.layer.name : "aerial imagery",
-      "charge_board:lead": s.src,
     }));
     /* The AFDC id rides along. It belongs here as much as on a station node:
        what it names is the record this edit answers, and a shop that has
@@ -3807,10 +3805,8 @@ async function save() {
     const cs = (open = await createChangeset({
       created_by: `${APP} ${VERSION}`,
       comment: `Add charging station${tags.brand ? ` (${tags.brand})` : ""}${s.state ? ` in ${s.state}` : ""}`,
-      source: CUR.layer ? CUR.layer.name : "aerial imagery",
+      source: s.src,
       imagery_used: CUR.layer ? CUR.layer.name : "aerial imagery",
-      // Where the lead came from, so a reviewer can judge it without asking.
-      "charge_board:lead": s.src,
     }));
     btn.textContent = "Uploading…";
     const id = await uploadNode(cs, pin.lat, pin.lon, tags);
