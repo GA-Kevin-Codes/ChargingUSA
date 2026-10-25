@@ -1,7 +1,8 @@
-/* Rebuild live/data/*.json for the sources that are not OpenStreetMap.
+/* Rebuild data/*.json for the sources that are not OpenStreetMap.
 
-   The board in preview mode reads saved payloads instead of calling the worker,
-   so the refresh button has to regenerate them locally. What each source is and
+   The published board reads these saved payloads instead of calling the
+   worker, so they are regenerated here — daily by the GitHub workflow, or by
+   hand for a local preview. What each source is and
    how it gets slimmed is decided in one place — worker.js — and this runs that
    same code rather than a second copy of it, the way refresh-osm.js does with
    slimOsm. A source that changes shape changes there and both follow.

@@ -56,10 +56,10 @@ const hostOf = (name) => {
   return null;
 };
 
-/* Brand marks. Icons are baked into data/brands.json as data URIs at build time
-   rather than hotlinked, so the page makes no third-party requests and nothing
-   breaks when a brand reshuffles its assets. Networks whose sites block
-   automated fetches (Tesla, EVgo, Ford) fall back to a monogram. */
+/* Brand marks. The SVGs ship in icons/ and data/brands.json points at them, so
+   they are served from the board's own origin — no third-party requests, and
+   nothing breaks when a brand reshuffles its assets. A network with no icon
+   falls back to a monogram. */
 let BRANDS = {};
 const MONO_HUES = [210, 24, 158, 42, 280, 340, 190, 100];
 function brandMark(name) {
@@ -811,7 +811,9 @@ function atlasData(M) {
   const stIx = new Map(codes.map((c, i) => [c, i]));
 
   const stride = 6;
-  const rows = M.sites.filter((s) => !s.hostOnly && s.lat != null && s.lon != null);
+  /* Every site, host-mapped ones included: they count as mapped in the figures
+     beside the map, so leaving them off it made the two disagree. */
+  const rows = M.sites.filter((s) => s.lat != null && s.lon != null);
   const d = new Int32Array(rows.length * stride);
   let at = 0;
   for (const s of rows) {
@@ -878,7 +880,7 @@ function render(M) {
     nets.set(s.net, e);
   }
   const ranked = [...nets].sort((a, b) => b[1][1] - a[1][1]);
-  const nationalPorts = M.sites.reduce((a, s) => a + (s.hostOnly ? 0 : s.ports), 0);
+  const nationalPorts = M.sites.reduce((a, s) => a + s.ports, 0);
   const nationalNets = new Set(M.sites.map((s) => s.net)).size;
   const bigNets = [...M.sites.reduce((m, s) => m.set(s.net, (m.get(s.net) || 0) + s.ports), new Map())]
     .filter(([, p]) => p >= 100).length;
@@ -924,7 +926,8 @@ function render(M) {
   safe("network rail", () => renderRail(ranked, nets));
 
   /* ---- figures ---- */
-  const pct = (mapped / S.length) * 100;
+  // a network with no sites in the chosen state is an empty slice, not NaN%
+  const pct = S.length ? (mapped / S.length) * 100 : null;
   // mapped in this browser, not yet visible in the snapshot behind the figures
   const localHere = S.filter((s) => s.osmLocal).length;
   const kpis = [
@@ -933,7 +936,7 @@ function render(M) {
     /* The sub-line owns up to the overlay. A figure that quietly counted work
        the snapshot cannot see would be the kind of number you stop trusting
        once you notice — better to show it and say where it came from. */
-    ["On the map", `${pct.toFixed(1)}%`,
+    ["On the map", pct == null ? "—" : `${pct.toFixed(1)}%`,
      `${nf(mapped)} of ${nf(S.length)}${localHere ? ` · ${nf(localHere)} awaiting refresh` : ""}`, ""],
     ["Missing", nf(missing), "no station on OSM", "var(--accent)"],
     VIEW.net
@@ -1276,7 +1279,7 @@ function missingGeoJSON(sites, scope) {
 const round6 = (v) => Math.round(v * 1e6) / 1e6;
 
 const missingHere = () => (MERGED?.sites || []).filter((s) =>
-  !s.osm && !s.hostOnly && s.lat != null && s.lon != null &&
+  !s.osm && s.lat != null && s.lon != null &&
   (!VIEW.state || s.state === VIEW.state) && (!VIEW.net || s.net === VIEW.net));
 
 function downloadMissing() {
@@ -1346,7 +1349,7 @@ function renderStateCoverage(sites) {
 
   const agg = new Map();
   for (const s of sites) {
-    if (!s.state || s.hostOnly) continue;
+    if (!s.state) continue;
     const e = agg.get(s.state) || { n: 0, m: 0, ports: 0, gap: 0 };
     e.n++;
     if (s.osm) e.m++; else { e.gap++; e.ports += s.ports || 0; }
@@ -1434,8 +1437,7 @@ function renderOpenings(S) {
   const host = $("open-rows");
   if (!host) return;
   const rows = openingsIn(S);
-  const nat = MERGED.sites.filter((s) => !s.hostOnly);
-  const natRecent = nat.filter((s) => openedWithinDays(s, 30));
+  const natRecent = MERGED.sites.filter((s) => openedWithinDays(s, 30));
   const natMapped = natRecent.filter((s) => s.osm).length;
 
   const note = $("open-note");
@@ -1508,7 +1510,7 @@ function renderNetworks(S, ranked) {
       : `<i class="dot dot--none" title="no spider"></i>`;
     const tr = el("tr");
     tr.innerHTML =
-      `<td><span class="rank num">${String(i + 1).padStart(2, "0")}</span> ${brandMark(net)}${net}</td>` +
+      `<td><span class="rank num">${String(i + 1).padStart(2, "0")}</span> ${brandMark(net)}${esc(net)}</td>` +
       `<td class="num" data-v="${e.n}">${nf(e.n)}</td>` +
       `<td class="num" data-v="${e.p}">${nf(e.p)}</td>` +
       `<td class="num" data-v="${(e.p / e.n).toFixed(3)}">${(e.p / e.n).toFixed(1)}</td>` +
@@ -1648,12 +1650,16 @@ function initControls() {
   };
   $("reset-view").onclick = () => { sel.value = ""; sel.onchange(); };
 
-  on("scope-clear", "click", () => {
+  /* Assigned rather than added: this runs again on every refresh, and stacked
+     listeners would repaint the board once per refresh on each click. */
+  const clear = $("scope-clear");
+  if (clear) clear.onclick = () => {
     VIEW.net = null;
     sel.value = "";
     sel.onchange();
-  });
-  on("net-all", "click", () => { VIEW.net = null; render(MERGED); });
+  };
+  const all = $("net-all");
+  if (all) all.onclick = () => { VIEW.net = null; render(MERGED); };
   const q = $("net-query");
   if (q) {
     q.value = VIEW.query || "";

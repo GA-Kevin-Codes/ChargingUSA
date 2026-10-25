@@ -1,11 +1,9 @@
 /* Which site is this, and what has this browser already done to it.
 
-   Loaded by every page that touches the editor's memory: the board reads it to
-   count work the snapshot has not caught up with, and the editor writes it. It
-   was briefly inside edit.js, and then briefly inside app.js — neither worked,
-   because points.html and dealers.html load the editor without the board, and
-   the board loads without them. One file all three include is the only shape
-   that does not end in two definitions of identity drifting apart.
+   Loaded before app.js and edit.js: the board reads it to count work the
+   snapshot has not caught up with, and the editor writes it. Kept in a file of
+   its own so that any page loading the editor without the board still shares
+   one definition of identity, rather than two drifting apart.
 
    Plain globals rather than a module: these pages are classic scripts sharing
    one lexical scope, which is what lets app.js and edit.js see each other. */
@@ -49,4 +47,13 @@ const remember = (bucket, s) => {
 };
 const rememberList = (bucket) =>
   (store.get(bucket, []) || []).map((e) => (typeof e === "string" ? { k: e, at: 0 } : e));
+/* The keys alone, as a Set. This is how a bucket is read for membership: the
+   entries themselves are {k, at} records, so a Set built straight from the
+   stored list holds objects and answers no for every key. */
 const rememberKeys = (bucket) => new Set(rememberList(bucket).map((e) => e.k));
+/* Drop every entry whose key is in `keys` — how a skipped site is brought back. */
+const forget = (bucket, keys) => {
+  const list = rememberList(bucket);
+  const kept = list.filter((e) => !keys.has(e.k));
+  if (kept.length !== list.length) store.set(bucket, kept);
+};

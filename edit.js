@@ -8,9 +8,9 @@
    a changeset the size of a state, which is unreviewable and undoable only as a
    block. Small changesets cost nothing and stay local.
 
-   Everything here hangs off app.js's globals (MERGED, VIEW, $, el, nf, cssv,
-   brandMark, sameBrand, render) and runs inside an IIFE so nothing collides with
-   them. */
+   Everything here hangs off the globals of app.js (MERGED, VIEW, $, el, nf,
+   cssv, brandMark, render) and site-keys.js (store, remember, rememberKeys) and
+   runs inside an IIFE so nothing collides with them. */
 
 (() => {
 "use strict";
@@ -35,7 +35,7 @@ const REDIRECT = new URL("osm-land.html", location.href).href;
 
 /* --------------------------------------------------------------- persistence */
 
-/* `store` lives in app.js — see the note on site identity there. */
+/* `store` lives in site-keys.js — see the note on site identity there. */
 const K = {
   env: "cb.osm.env",
   client: (e) => `cb.osm.${e}.client`,
@@ -45,6 +45,8 @@ const K = {
   done: "cb.improve.done",
   skip: "cb.improve.skip",
   note: "cb.improve.note",
+  // sites brought back by hand: past the notes check and the host-noted filter
+  restore: "cb.improve.restore",
   mode: "cb.improve.mode",
   upDone: "cb.improve.up.done",
   upSkip: "cb.improve.up.skip",
@@ -71,9 +73,10 @@ const session = () => store.get(K.token(envKey()));
    whatever the coordinate does. Reading matches on any of a site's keys, which
    is what keeps lists written before this from being quietly discarded, and
    what makes a site stay skipped when its cluster gains or loses a record. */
-/* `posKey`, `refKeys`, `keyOf`, `keysOf`, `isRemembered` and `remember` live in
-   app.js: the board applies this same memory to its own figures, and one
-   definition of "which site is this" beats two that can disagree about it. */
+/* `posKey`, `refKeys`, `keyOf`, `keysOf`, `isRemembered`, `remember`, `forget`
+   and `rememberKeys` live in site-keys.js: the board applies this same memory to
+   its own figures, and one definition of "which site is this" beats two that
+   can disagree about it. */
 
 
 /* A source name short enough to sit on a map. The provenance strings are for
@@ -470,9 +473,8 @@ async function applyTags(type, id, tags, cs, expect = null) {
 /* ------------------------------------------------------------------ tracing
 
    Drawing an outline from clicks on imagery, and the squaring that makes it
-   look like a building someone surveyed rather than a hand-drawn blob. Moved
-   here from the dealers page when the charging editor needed to trace too:
-   nothing about a rectangle is specific to a car dealership. */
+   look like a building someone surveyed rather than a hand-drawn blob. Used by
+   the outline tool on the area and upgrade cards. */
 
 /* Create a closed way from traced points, tags and all.
 
@@ -708,7 +710,12 @@ function CAR_POI(t) {
    Closed ones count. A resolved note means somebody went and looked, which is
    more reason not to ask again, not less. `closed=-1` is the API's way of
    saying "regardless of status" — the default would hide anything resolved
-   more than a week ago, which is exactly the case that bites. */
+   more than a week ago, which is exactly the case that bites.
+
+   Only notes about charging count. 150 m takes in the road outside, and a note
+   there about a turn lane says nothing about this site — one closed in 2021 kept
+   a Rhode Island ChargePoint stepping itself out of the queue on every pass. */
+const ABOUT_CHARGING = /charg|\bev\b|electric vehicle|supercharg|ref:afdc|socket|plug/i;
 async function notesNear(lat, lon, m = 150) {
   const dLat = m / 111320;
   const dLon = dLat / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
@@ -729,7 +736,7 @@ async function notesNear(lat, lon, m = 150) {
       lat: flat, lon: flon,
       away: metres(here, { lat: flat, lon: flon }),
     };
-  }).sort((a, b) => a.away - b.away);
+  }).filter((n) => ABOUT_CHARGING.test(n.text)).sort((a, b) => a.away - b.away);
 }
 
 async function nearbyStations(lat, lon, m = 250) {
@@ -1002,8 +1009,8 @@ class TileMap {
   }
   down(e) {
     const p = this.at(e);
-    // `grab` lets the page offer its own draggable things — the charge-point
-    // site uses it to nudge a misplaced node — and takes precedence over the
+    // `grab` lets the page offer its own draggable things — the upgrade card
+    // uses it to nudge a misplaced charge point — and takes precedence over the
     // pin, which is the more obvious target and easy to reach for by mistake.
     const target = this.grab?.(p) ?? null;
     const onPin = !target && this.nearPin(p);
@@ -1041,8 +1048,8 @@ class TileMap {
     if (d && d.moved < 5 && d.mode !== "grab") {
       const p = this.at(e);
       const ll = this.toLatLon(p.x, p.y);
-      // The dealer site traces building outlines and wants the raw click; if it
-      // consumes one, the pin stays where it is. Nothing else sets this hook.
+      // The area and upgrade cards trace outlines and place charge points with
+      // the raw click; if one consumes it, the pin stays where it is.
       if (this.onmapclick?.(ll, p)) { this.schedule(); return; }
       if (this.pin) {
         this.pin = ll;
@@ -1144,7 +1151,7 @@ class TileMap {
       }
     }
 
-    // The charge-point site draws its own numbered members through this hook.
+    // The area and upgrade cards draw their outline and points through this hook.
     if (this.drawOthers) this.drawOthers(ctx, this);
     else for (const o of this.others) {
       const [x, y] = this.toPx(o.lat, o.lon);
@@ -1348,13 +1355,18 @@ const layerYear = (L) => (dateKey(L) ? dateKey(L).slice(0, 4) : "undated");
 /* --------------------------------------------------------------------- tags */
 
 /* What each network is called in OSM. The board's labels are display names and
-   several are not what belongs in the tag: ChargePoint sells hardware onto
-   sites other people own, so its stations get `network`, not `operator`. No
-   wikidata ids are proposed — a wrong one is worse than a missing one, and they
-   are not derivable from anything the board holds. */
+   several are not what belongs in the tag.
+
+   Where the name-suggestion index (NSI) has an entry, the tags are copied from
+   it — name and Wikidata id as a pair, operator too where NSI gives one —
+   because that is what iD and the NSI matcher expect, and they would "correct"
+   anything else back towards it. Every other network proposes the board's
+   label, with a Wikidata id from data/brands.json or one confirmed by hand. */
 const NETWORKS = {
-  Tesla: { brand: "Tesla Supercharger", sockets: ["nacs"] },
-  "Supercharger for Business": { brand: "Tesla Supercharger", sockets: ["nacs"] },
+  // NSI "Tesla": brand=Tesla, brand:wikidata=Q478214 (Tesla, Inc.)
+  Tesla: { brand: "Tesla", brandQid: "Q478214", sockets: ["nacs"] },
+  // Tesla hardware run by a host; NSI files every Supercharger under "Tesla"
+  "Supercharger for Business": { brand: "Tesla", brandQid: "Q478214", sockets: ["nacs"] },
   "Electrify America": { brand: "Electrify America" },
   IONNA: { brand: "IONNA" },
   EVgo: { brand: "EVgo" },
@@ -1365,7 +1377,10 @@ const NETWORKS = {
   "Circle K": { brand: "Circle K" },
   "Francis Energy": { brand: "Francis Energy" },
   "Electric Era": { brand: "Electric Era" },
-  Rivian: { brand: "Rivian Adventure Network" },
+  // NSI "Rivian Adventure Network", run by Rivian Automotive (Q7338847). The
+  // board's DC data carries no Rivian Waypoints sites, which NSI lists apart.
+  Rivian: { brand: "Rivian Adventure Network", brandQid: "Q7338847",
+            operator: "Rivian", operatorQid: "Q7338847" },
   "Red E": { brand: "Red E" },
   Independent: {},                              // nothing trustworthy to name
 };
@@ -1412,9 +1427,9 @@ function forgetWikidata(value) {
 
 /* A hand-edit is a confirmation too. Without this, correcting a name or a QID
    fixes one site and the next one of that network arrives with the old value
-   again — Wikidata's label for the Tesla entity is "Tesla Supercharger
-   network", where OSM says "Tesla Supercharger", so this is the normal case,
-   not the exotic one. Memory is always keyed on the name as this tool proposes
+   again — Wikidata's label for Rivian's entity is "Rivian Automotive", where
+   OSM says "Rivian Adventure Network", so this is the normal case, not the
+   exotic one. Memory is always keyed on the name as this tool proposes
    it, never on the corrected form, or the lookup would miss next time. */
 function syncMemory(key) {
   const base = key.endsWith(":wikidata") ? key.slice(0, -":wikidata".length) : key;
@@ -1436,8 +1451,11 @@ function proposeTags(s) {
      entity have to agree, or the pair says two different things. So the stored
      entry carries both, and is keyed on the name as proposed here — that is the
      string the next site of this network arrives with. */
-  const put = (k, v) => {
+  const put = (k, v, nsiQid) => {
     if (!v) return;
+    /* A pair copied from NSI goes on exactly as NSI has it. A spelling this
+       browser remembers from an earlier lookup must not drift it away again. */
+    if (nsiQid) { t[k] = v; t[`${k}:wikidata`] = nsiQid; return; }
     /* The brand table wins on `brand:wikidata`. It is curated per company and
        shipped with the board, where `recallWikidata` only knows what this
        browser has confirmed by hand — so the table answers on the first site of
@@ -1450,8 +1468,8 @@ function proposeTags(s) {
     const qid = known || hit?.qid;
     if (qid) t[`${k}:wikidata`] = qid;
   };
-  put("operator", net.operator);
-  put("brand", net.brand);
+  put("brand", net.brand, net.brandQid);
+  put("operator", net.operator, net.operatorQid);
   put("network", net.network);
 
   /* The published ids for this site, in the registers OSM keeps a tag for.
@@ -1703,22 +1721,6 @@ function gearTags(gear) {
 const BLANK_GEAR = { manufacturer: "", mfgQ: "", model: "", modelQ: "",
                      brand: "", brandQ: "", current: "", voltage: "" };
 
-/* Look a name up on Wikidata rather than making somebody go and find a Q-id.
-
-   wbsearchentities is the same endpoint the Wikidata site's own box uses; it
-   allows cross-origin reads, so this needs no key and no proxy. Results are
-   labelled with their description because "Tritium" is a company, a hydrogen
-   isotope and a watch coating, and the description is the only thing that tells
-   them apart at a glance. */
-async function wikidataSearch(term) {
-  const url = "https://www.wikidata.org/w/api.php?action=wbsearchentities" +
-    `&format=json&origin=*&language=en&uselang=en&type=item&limit=7&search=${encodeURIComponent(term)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Wikidata answered ${res.status}`);
-  const body = await res.json();
-  return (body.search || []).map((r) => ({ id: r.id, label: r.label || r.id, desc: r.description || "" }));
-}
-
 /* A library of cabinets, kept apart from the per-network memory.
 
    A model is a product, not a setting: an Alpitronic HYC400 is the same box
@@ -1835,8 +1837,8 @@ function fillIdentity(tags, gear) {
    a way or relation has already been drawn by somebody. */
 function upgradePool() {
   if (!MERGED) return [];
-  const done = new Set(store.get(K.upDone, []));
-  const skip = new Set(store.get(K.upSkip, []));
+  const done = rememberKeys(K.upDone);
+  const skip = rememberKeys(K.upSkip);
   return MERGED.sites
     .filter((s) => s.osm && !s.hostOnly && s.osmId?.[0] === "n" && s.units?.length)
     .filter((s) => !VIEW.net || s.net === VIEW.net)
@@ -2092,7 +2094,7 @@ function upgradeCard(side) {
             : !u.hits.rows.length ? `<p class="imp-note">Nothing on Wikidata for that name.</p>`
             : u.hits.rows.map((r) => `<button class="imp-hit" data-take="${esc(r.id)}" data-for="${esc(u.hits.key)}">
                 <b>${esc(r.label)}</b> <span class="mono">${esc(r.id)}</span>
-                ${r.desc ? `<span class="imp-hit-desc">${esc(r.desc)}</span>` : ""}</button>`).join("")}
+                ${r.description ? `<span class="imp-hit-desc">${esc(r.description)}</span>` : ""}</button>`).join("")}
         </div>` : ""}
         <div class="imp-poi-acts">
           <button class="imp-chip" id="up-model-save"${modelLabel(u.gear) ? "" : " disabled"}>${
@@ -2590,12 +2592,13 @@ function openedWithin(s, days) {
    per-state counts, which are exactly this pool grouped by state. */
 function candidatePool() {
   if (!MERGED) return [];
-  const done = new Set(store.get(K.done, []));
-  const skip = new Set(store.get(K.skip, []));
+  const done = rememberKeys(K.done);
+  const skip = rememberKeys(K.skip);
   /* Noted sites leave the queue too — the work of looking has been done and
      recorded. Kept apart from skips so the three outcomes stay tellable apart:
      rejected, questioned, mapped. */
-  const noted = new Set(store.get(K.note, []));
+  const noted = rememberKeys(K.note);
+  const restored = rememberKeys(K.restore);
   return MERGED.sites
     /* `noted` is out as well as `osm`. This is the queue's half of what the
        dealership route already assumes: a site whose charging is recorded on
@@ -2603,9 +2606,39 @@ function candidatePool() {
        for the same edit twice. Until now that only held while the localStorage
        that remembered it survived — read off the map instead, it holds on any
        machine and for whoever did the work. */
-    .filter((s) => !s.osm && !s.noted && s.lat != null && s.lon != null)
+    .filter((s) => !s.osm && (!s.noted || isRemembered(restored, s)) && s.lat != null && s.lon != null)
     .filter((s) => !VIEW.net || s.net === VIEW.net)
     .filter((s) => !isRemembered(done, s) && !isRemembered(skip, s) && !isRemembered(noted, s));
+}
+
+/* Sites the editor is keeping out of the queue that the board still counts as
+   work: skipped, noted or marked mapped in this browser, or — in the unmapped
+   queue — recorded on a host business. Scoped like the queue, by network and
+   (unless `allStates`) by state, so bringing them back acts on what is in front
+   of you instead of wiping every list at once. */
+function hiddenSites(allStates = false) {
+  if (!MERGED) return [];
+  const up = MODE() === "upgrade";
+  const sets = (up ? [K.upSkip, K.upDone] : [K.skip, K.note, K.done]).map(rememberKeys);
+  const restored = rememberKeys(K.restore);
+  return MERGED.sites
+    .filter((s) => up
+      ? s.osm && !s.hostOnly && s.osmId?.[0] === "n" && s.units?.length
+      : !s.osm && s.lat != null && s.lon != null)
+    .filter((s) => !VIEW.net || s.net === VIEW.net)
+    .filter((s) => allStates || !VIEW.state || s.state === VIEW.state)
+    .filter((s) => sets.some((set) => isRemembered(set, s)) ||
+                   (!up && s.noted && !isRemembered(restored, s)));
+}
+
+/* Off every list that was hiding them, and onto one that keeps them past the
+   notes check and the host filter. Skipping one again hides it again. */
+function bringBack(sites) {
+  if (!sites.length) return;
+  const keys = new Set(sites.flatMap(keysOf));
+  for (const b of [K.skip, K.note, K.done, K.upSkip, K.upDone]) forget(b, keys);
+  for (const s of sites) remember(K.restore, s);
+  start();
 }
 
 function candidates() {
@@ -2811,14 +2844,22 @@ function paintReadout() {
 function paintStates() {
   const sel = $("imp-state");
   if (!sel) return;
-  const counts = new Map();
-  for (const s of candidatePool()) if (s.state) counts.set(s.state, (counts.get(s.state) || 0) + 1);
+  const counts = new Map(), hidden = new Map();
+  const pool = MODE() === "upgrade" ? upgradePool() : candidatePool();
+  for (const s of pool) if (s.state) counts.set(s.state, (counts.get(s.state) || 0) + 1);
+  /* A state whose only sites are hidden still gets a row, so there is a way to
+     reach it and bring them back. */
+  for (const s of hiddenSites(true)) if (s.state) {
+    hidden.set(s.state, (hidden.get(s.state) || 0) + 1);
+    if (!counts.has(s.state)) counts.set(s.state, 0);
+  }
   if (VIEW.state && !counts.has(VIEW.state)) counts.set(VIEW.state, 0);   // keep a cleared state selectable
   const total = [...counts.values()].reduce((a, b) => a + b, 0);
   sel.innerHTML =
     `<option value="">All states — ${nf(total)}</option>` +
     [...counts].sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([st, n]) => `<option value="${st}">${st} — ${nf(n)}</option>`).join("");
+      .map(([st, n]) => `<option value="${st}">${st} — ${nf(n)}${
+        hidden.get(st) ? ` (+${nf(hidden.get(st))} hidden)` : ""}</option>`).join("");
   sel.value = VIEW.state || "";
 }
 
@@ -2855,11 +2896,18 @@ function paintProgress() {
   /* Said out loud, because a queue that advances by itself with no explanation
      reads as a glitch. These are sites somebody had already asked about. */
   const noted = CUR.noted ? ` · ${nf(CUR.noted)} already noted, skipped` : "";
-  p.innerHTML = !CUR.queue.length ? ""
+  const head = !CUR.queue.length ? ""
     : CUR.site ? `<b>${nf(CUR.at + 1)}</b> of ${nf(CUR.queue.length)} ${
         MODE() === "upgrade" ? "mapped as a node" : "unmapped"}${scope ? ` in ${esc(scope)}` : ""}${
         VIEW.impOpen != null ? `, opened in ${nf(VIEW.impOpen)} days` : ""}${done}${noted}`
     : `queue finished${done}`;
+  // always reachable, not only once the queue runs dry
+  const hidden = hiddenSites().length;
+  p.innerHTML = head + (hidden
+    ? `${head ? " · " : ""}<button class="imp-link" id="imp-back"
+         title="Skipped, noted or marked mapped in this browser">${nf(hidden)} hidden — bring back</button>`
+    : "");
+  p.querySelector("#imp-back")?.addEventListener("click", () => bringBack(hiddenSites()));
 }
 
 /* ---- sidebar ---- */
@@ -2972,14 +3020,21 @@ function wireEnv(side) {
 }
 
 function emptyCard(side) {
+  const hidden = hiddenSites();
+  const up = MODE() === "upgrade";
+  const one = hidden.length === 1;
   side.innerHTML = `
     <div class="imp-card">
       <h3>Nothing left in this view</h3>
-      <p>Every unmapped site ${VIEW.state ? `in ${esc(VIEW.state)} ` : ""}${VIEW.net ? `for ${esc(VIEW.net)} ` : ""}has been
-         added or skipped. Change the state or network filter on the board and reopen.</p>
-      <button class="imp-link" id="imp-unskip">Bring skipped sites back</button>
+      <p>Every ${up ? "node-mapped" : "unmapped"} site ${VIEW.state ? `in ${esc(VIEW.state)} ` : ""}${VIEW.net ? `for ${esc(VIEW.net)} ` : ""}has been
+         dealt with. ${hidden.length
+           ? `${nf(hidden.length)} ${one ? "is" : "are"} only hidden — skipped, noted or marked as
+              mapped in this browser — and ${up ? `${one ? "is" : "are"} still a bare node on the map`
+              : `the board still counts ${one ? "it" : "them"} as missing`}.`
+           : "Change the state or network filter on the board and reopen."}</p>
+      ${hidden.length ? `<button class="imp-link" id="imp-unskip">Bring ${one ? "it" : `all ${nf(hidden.length)}`} back</button>` : ""}
     </div>`;
-  side.querySelector("#imp-unskip").onclick = () => { store.del(K.skip); start(); };
+  side.querySelector("#imp-unskip")?.addEventListener("click", () => bringBack(hidden));
 }
 
 // the chosen dealership, clamped — the list changes with every site
@@ -3079,6 +3134,17 @@ function workCard(side) {
              around them. Adding what is known to one of them is fine; grouping them into a
              station is what the charge points tool is for.</p>` : ""}
         <button class="imp-link" id="imp-mapped">Mark as already mapped and skip</button>
+      </div>` : ""}
+
+    ${CUR.notes?.length ? `
+      <div class="imp-warn">
+        <b>${CUR.notes.length === 1 ? "A note about charging is" : `${nf(CUR.notes.length)} notes about charging are`} already here</b>
+        ${CUR.notes.slice(0, 3).map((n) => `
+          <div class="imp-near">
+            <a href="${ENV().web}/note/${esc(n.id)}" target="_blank" rel="noopener">Note #${esc(n.id)}</a>
+            <span class="mono">${n.open ? "open" : "closed"} · ${Math.round(n.away)} m</span>
+          </div>
+          <p class="imp-note">${esc(n.text.slice(0, 160))}${n.text.length > 160 ? "…" : ""}</p>`).join("")}
       </div>` : ""}
 
     ${CUR.diff ? diffCard(CUR.diff) : ""}
@@ -3268,8 +3334,14 @@ async function openWikidata(key) {
   else $("wd-q")?.focus();
 }
 
-/* The lookup itself, with no UI attached, so the charge-point site can offer the
-   same search against the same remembered answers. */
+/* Look a name up on Wikidata rather than making somebody go and find a Q-id.
+   Shared by the tag panel and the dispenser panel.
+
+   wbsearchentities is the same endpoint the Wikidata site's own box uses; it
+   allows cross-origin reads, so this needs no key and no proxy. Results carry
+   their description because "Tritium" is a company, a hydrogen isotope and a
+   watch coating, and the description is the only thing that tells them apart
+   at a glance. */
 async function wikidataSearch(q) {
   const url = "https://www.wikidata.org/w/api.php?" + new URLSearchParams({
     action: "wbsearchentities", format: "json", origin: "*",
@@ -3445,6 +3517,8 @@ function paintWho() {
 /* ------------------------------------------------------------------- flow */
 
 const MODE = () => (store.get(K.mode) === "upgrade" ? "upgrade" : "add");
+// The card that adds a single node. Enter and `save` belong to it alone.
+const nodeCard = () => MODE() !== "upgrade" && CUR.up?.shape !== "area";
 
 async function start() {
   CUR.queue = MODE() === "upgrade" ? upgrades() : candidates();
@@ -3462,6 +3536,7 @@ async function show() {
   const s = CUR.queue[CUR.at] || null;
   CUR.site = s;
   CUR.near = [];
+  CUR.notes = [];
   CUR.cars = [];
   CUR.carPick = 0;
   CUR.diff = null;
@@ -3577,8 +3652,17 @@ async function show() {
      happen to the site. */
   notesNear(s.lat, s.lon).then((notes) => {
     if (CUR.site !== forSite) return;
+    CUR.notes = notes;
     // a site that stands is the end of any run of skipped ones
     if (!notes.length) { CUR.notedRun = 0; return; }
+    /* Brought back by hand, or opened straight from the board: somebody has
+       already decided to look, so the notes go on the card for them to read
+       instead of being used to step over the site. */
+    if (CUR.direct === s || isRemembered(rememberKeys(K.restore), s)) {
+      CUR.notedRun = 0;
+      if (!$("imp-tags")?.querySelector(".is-editing")) paintSide();
+      return;
+    }
     remember(K.note, s);
     CUR.noted = (CUR.noted || 0) + 1;
     /* A region where everything is noted, or a notes API answering oddly,
@@ -3648,10 +3732,9 @@ function skip(kind) {
    network — and until now the only thing to do about that was skip, which threw
    the knowledge away and left the site to come back around next time.
 
-   The diff is the same one the dealers page has used all along, which is why
-   `planTags` now lives in this file: adds and upgrades arrive ticked, a change
-   that would overwrite something real never does, and what OSM has that we do
-   not is listed where it is obvious that uploading leaves it alone. */
+   The diff is `planTags`: adds and upgrades arrive ticked, a change that would
+   overwrite something real never does, and what OSM has that we do not is
+   listed where it is obvious that uploading leaves it alone. */
 async function readNear(i) {
   const n = CUR.near[i];
   if (!n || CUR.busy) return;
@@ -3790,7 +3873,7 @@ async function tagDealership() {
 }
 
 async function save() {
-  if (CUR.busy || !CUR.site) return;
+  if (CUR.busy || !CUR.site || !nodeCard()) return;
   const s = CUR.site, tags = { ...CUR.tags }, pin = { ...CUR.pin };
   if (!Object.keys(tags).length) return fail("Add at least one tag before saving.");
   if (!tags.amenity) return fail("Nothing here says what this is — an amenity tag is required.");
@@ -3897,6 +3980,7 @@ async function leaveNote(kind = "site") {
    asked for, and the mode is chosen to match what that site needs. */
 async function openAt(site) {
   if (!site) return open();
+  CUR.direct = site;
   store.set(K.mode, site.osm ? "upgrade" : "add");
   // an unmapped site of any age must not be filtered out from under the click
   VIEW.impOpen = null;
@@ -3938,7 +4022,14 @@ function keys(e) {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
   if (e.key === "Escape" && !typing) { e.preventDefault(); close(); return; }
   if (typing || !CUR.site) return;
-  if (e.key === "Enter") { e.preventDefault(); save(); }
+  if (e.key === "Enter") {
+    /* Enter is "save this pin" — the node-adding shortcut — and nothing else.
+       On an area or upgrade card it would drop a second station onto a site
+       that is already mapped, and a focused button answers Enter on its own. */
+    if (!nodeCard() || document.activeElement?.tagName === "BUTTON") return;
+    e.preventDefault();
+    save();
+  }
   else if (e.key === "s" || e.key === "S") { e.preventDefault(); skip("skip"); }
   else if (MODE() === "upgrade" && (e.key === "q" || e.key === "Q")) {
     e.preventDefault();
@@ -3949,10 +4040,10 @@ function keys(e) {
   else if (e.key === "-") { MAP.zoomAround(MAP.W / 2, MAP.H / 2, -1); }
 }
 
-/* Shared with the charge-point site, which needs the same sign-in, the same
-   tile map and the same imagery ranking. Exposed rather than copied: one
-   implementation of the OAuth dance and one of the changeset upload is all
-   anyone should have to reason about. */
+/* Exposed so another page that loads this file can reuse the sign-in, the tile
+   map, the imagery ranking and the changeset upload rather than copying them:
+   one implementation of the OAuth dance is all anyone should have to reason
+   about. */
 window.OSMKit = {
   ENVS, envKey, ENV, clientId, session, signIn, signOut,
   osmFetch, createChangeset, uploadNode, closeChangeset,

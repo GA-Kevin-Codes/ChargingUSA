@@ -47,9 +47,16 @@
   // something useful instead of leaving a blank page sitting there.
   window.close();
   setTimeout(() => {
-    document.getElementById("msg").innerHTML = payload.error
-      ? `Sign-in failed: <code>${payload.error}</code><br>Close this window and try again.`
-      : "Signed in. You can close this window — the board has carried on behind it.";
+    const msg = document.getElementById("msg");
+    if (!payload.error) {
+      msg.textContent = "Signed in. You can close this window — the board has carried on behind it.";
+      return;
+    }
+    // `error` is read off this page's own URL, so anyone can write it: text, never markup.
+    const code = document.createElement("code");
+    code.textContent = payload.error;
+    msg.replaceChildren("Sign-in failed: ", code, document.createElement("br"),
+                        "Close this window and try again.");
   }, 400);
 </script>
 </body>

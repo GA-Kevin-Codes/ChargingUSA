@@ -90,6 +90,9 @@
       if (seed !== undefined) el._cfg[a] = seed;
     }
   }
+  // Network and state names come from the feeds; they reach the tooltip as text.
+  const h = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const cfg = (el, name) => (el._cfg && el._cfg[name] != null ? el._cfg[name] : el.getAttribute(name));
   const flag = (v) => v != null && v !== false && v !== "false";
 
@@ -309,7 +312,7 @@
         if (best >= 0) {
           const net = this._d.points.nets[this._pts[best + 2]];
           const ports = this._pts[best + 3], on = (this._pts[best + 4] & 1) === 1;
-          this._tip.innerHTML = '<b style="font-weight:700">' + net + "</b> · " + ports + " DC ports<br>" +
+          this._tip.innerHTML = '<b style="font-weight:700">' + h(net) + "</b> · " + ports + " DC ports<br>" +
             '<span style="color:' + (on ? "#4f4b4b" : "#c8300f") + '">' + (on ? "on OpenStreetMap" : "missing from the map") + "</span>";
           this._tip.style.left = this._pts[best] + "px";
           this._tip.style.top = this._pts[best + 1] + "px";
@@ -323,7 +326,7 @@
       const st = this._d.states[found] || {};
       const a = (this._agg2 || {})[found] || { sites: 0, ports: 0, mapped: 0 };
       const pct = a.sites ? Math.round((a.mapped / a.sites) * 100) : 0;
-      this._tip.innerHTML = '<b style="font-weight:700">' + (st.name || found) + "</b> · " +
+      this._tip.innerHTML = '<b style="font-weight:700">' + h(st.name || found) + "</b> · " +
         a.sites.toLocaleString() + " sites, " + a.ports.toLocaleString() + " ports<br>" +
         '<span style="color:#4f4b4b">' + pct + "% on the map · </span>" +
         '<span style="color:#c8300f">' + (a.sites - a.mapped).toLocaleString() + " missing</span>";

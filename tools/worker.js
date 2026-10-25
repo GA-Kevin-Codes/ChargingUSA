@@ -173,9 +173,9 @@ function slimOsm(el) {
     ...(t.amenity === "charging_station" ? {} : { host: true }),
     name: t.name || t.operator || t.brand || null,
     brand: t.brand || t.operator || t.network || null,
-    // kept apart from `brand` as well as folded into it: the charge-point site
-    // groups stations that share an operator, a brand or a name, and cannot
-    // tell those apart once they are flattened into one field
+    // kept apart from `brand` as well as folded into it, so anything grouping
+    // stations by operator, brand or name can still tell the three apart once
+    // `brand` has flattened them into one field
     operator: t.operator || null,
     capacity: t.capacity ? Number(t.capacity) : null,
     dc: Object.keys(sockets).some((s) => DC_SOCKETS.has(s)),
@@ -424,4 +424,4 @@ function err(status, message, origin) {
   });
 }
 
-export { slimOsm, slimEli };
+export { slimOsm, splitOsm, slimEli };
