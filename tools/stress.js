@@ -101,7 +101,7 @@ const src = (f) => readFileSync(`${ROOT}${f}`, "utf8");
    the middle hands the test the handful of app.js internals it asks about. */
 vm.runInContext(
   src("site-keys.js") + "\n" + src("app.js") + `
-;window.__board = { merge, siteInventory, afdcKinds, kindLabel, siteBays, unitSockets,
+;window.__board = { merge, siteInventory, afdcKinds, kindLabel, siteBays, unitSockets, collapse, addressKey, hostWords, sameHost,
                     missingGeoJSON, DC_SOCKET, get MERGED() { return MERGED; } };
 ` + src("edit.js"), sandbox, { filename: "board.js" });
 
@@ -234,6 +234,43 @@ if (K.expandStreet) table("expandStreet", K.expandStreet, [
   ["", null], [null, null],
 ]);
 
+/* When two records of one network are one site. `collapse` is given two rows
+   and asked how many sites they make. */
+{
+  const at = (lat, lon, name, street, more = {}) => ({ lat, lon, name, street, city: "Phoenix", state: "AZ", ...more });
+  const near = 0.0004;                                   // about 45 m of latitude
+  const sites = (a, b) => T.collapse([a, b]).length;
+  const cases = [
+    // the same address, however it is written, wherever the coordinates landed
+    [at(33.5, -112, "Station 1", "21215 Burbank Blvd"), at(33.505, -112, "Other 2", "21215 Burbank Boulevard"), 1],
+    [at(33.5, -112, "A", "300 Massachusetts Avenue Under Solar Canopy"), at(33.5, -112, "B", "300 Massachusetts Ave"), 1],
+    // standing together, and naming the same host
+    [at(33.5, -112, "PIE AE WEST LAKE DC4", "701 S Capital of Texas Hwy"), at(33.5 + near, -112, "PIE AE WEST LAKE DC3", "703 S Capital of Texas Hwy"), 1],
+    [at(33.5, -112, "L396 SERVICE DRIVE", "3934 US-19"), at(33.5 + near, -112, "L396 SHOWROOM", "3936 US-19"), 1],
+    [at(33.5, -112, "MASSDOT BARNSTABLE PR#2", "2155 Iyannough Road"), at(33.5 + near, -112, "MASSDOT BARN EXP #2", "2145 Iyannough Road"), 1],
+    [at(33.5, -112, "Ingles", "1869 Hendersonville Hwy"), at(33.5 + near, -112, "Ingles Markets - Skyland Plaza", "1865 Hendersonville Rd"), 1],
+    // and the same answer whichever record comes first
+    [at(33.5, -112, "Ingles Markets - Skyland Plaza", "1865 Hendersonville Rd"), at(33.5 + near, -112, "Ingles", "1869 Hendersonville Hwy"), 1],
+    [at(33.5, -112, "CITYOFPATTERSON CITY HALL", "315 W Las Palmas"), at(33.5 + near, -112, "CITYOFPATTERSON CH-NEW", "333 West Las Palmas Avenue"), 2],
+    [at(33.5, -112, "CITYOFPATTERSON CH-NEW", "333 West Las Palmas Avenue"), at(33.5 + near, -112, "CITYOFPATTERSON CITY HALL", "315 W Las Palmas"), 2],
+    // standing together at one number and street, the town spelled two ways
+    [at(33.5, -112, "SMECO - Charlotte Hall Library", "37600 New Market Rd", { city: "Charlotte Hall" }), at(33.5 + near, -112, "SWTCH Energy", "37600 New Market Rd", { city: "Mechanicsville" }), 1],
+    // standing together and nothing else in common: two sites
+    [at(33.5, -112, "ABC Nissan", "1300 E Camelback Rd"), at(33.5 + near, -112, "Midway Nissan", "2201 W Bell Rd"), 2],
+    [at(33.5, -112, "KEY CENTER KEY CENTER 5", "601 108th Ave NE"), at(33.5 + near, -112, "AMZ SEA105-28 P4", "700 108th Ave NE"), 2],
+    [at(33.5, -112, "Quality INN Woodland", "1562 E Main St"), at(33.5 + near, -112, "MOTEL 6 Woodland", "1564 E Main St"), 2],
+    [at(33.5, -112, "MBCL EXPRESS 250", "15951 Gulf Fwy"), at(33.5 + near, -112, "BMW CL DC250 1", "15943 Gulf Fwy"), 2],
+    // the same spot by their coordinates, in two different states: one of them is wrong
+    [at(33.5, -112, "FASTLANE FLMOBERLY DC1", "600 US-24", { state: "MO" }), at(33.5, -112, "FASTLANE FLMOBERLY DC2", "600 US-24", { state: "MA", city: "Amherst" }), 2],
+    // the same address forty kilometres apart is a head office, not a site
+    [at(33.5, -112, "Dealer North", "1 Main St"), at(33.9, -112, "Dealer South", "1 Main St"), 2],
+  ];
+  for (const [a, b, want] of cases) {
+    const got = sites(a, b);
+    if (got !== want) fail("collapse: wrong answer", `${a.name} @ ${a.street}  +  ${b.name} @ ${b.street} → ${got} site${got === 1 ? "" : "s"}, wanted ${want}`);
+  }
+}
+
 /* Who may use it. The site is a stand-in with only the fields `accessFor`
    reads; `fac: "OTHER"` keeps the dealership guess out of the way. */
 if (K.accessFor) table("accessFor", (a) => K.accessFor({ src: "AFDC", fac: "OTHER", name: "x", ...a })?.value ?? null, [
@@ -353,6 +390,27 @@ for (const s of M.sites) {
   }
   if (/supercharge/.test(s.src) && inv.src === "supercharge.info" && inv.capacity !== s.ports)
     fail("payload: Supercharger capacity is not the stall count", `${id(s)} ${inv.capacity} vs ${s.ports}`);
+
+  /* ---- the join, checked on what it produced ----
+
+     Every record in a collapsed site has to be tied to another one in it by
+     something more than standing nearby: the same address, or the same host's
+     name. Worked out here from the records the site kept, by this file's own
+     comparison of the two pairs of fields, so a rule that quietly went back
+     to distance alone would show up as records with nothing in common. */
+  if (s.recs?.length > 1) {
+    const hw = s.recs.map((r) => T.hostWords(r.name));
+    // the house number alone: crude, and deliberately nothing the board's own
+    // address reading could have got wrong in the same way
+    // (a line with no number — "Skyline Dr, Milepost 51" — is compared whole)
+    const street = s.recs.map((r) => /^\d+/.exec(String(r.street || "").trim())?.[0]
+      || String(r.street || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim());
+    const tied = s.recs.map((r, i) => s.recs.some((o, j) => j !== i &&
+      (T.sameHost(hw[i], hw[j]) || (street[i] && street[i] === street[j]))));
+    if (tied.some((x) => !x)) fail("merge: a record joined to a site it shares neither address nor host with",
+      `${id(s)} — ${s.recs.map((r) => `${r.name} @ ${r.street}`).join(" ‖ ").slice(0, 160)}`);
+    note("sites joined from several AFDC records", null);
+  }
 
   /* Tesla's own arithmetic: every stall has a NACS cable. */
   if (/supercharge/.test(s.src) && inv.src === "supercharge.info" && inv.sockets.nacs?.n !== s.ports)

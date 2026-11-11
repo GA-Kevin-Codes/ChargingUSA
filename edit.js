@@ -2475,6 +2475,16 @@ function evidenceCard(s) {
   if (s.other === false) row("Open to", "Tesla vehicles only");
   if (s.hours) row("Hours", `“${esc(s.hours)}”${parseHours(s.hours) || s.hoursOsm ? "" : ` <span class="imp-unused">not a tag</span>`}`);
   if (s.price) row("Price", `“${esc(s.price)}”${parsePrice(s.price) ? "" : ` <span class="imp-unused">not a tag</span>`}`);
+  /* The records that were joined into this site, each in its own words. The
+     join is a judgement — same network, and the same address or the same host
+     named within 80 m — and this is the evidence for it, so that "these four
+     are one site" can be checked rather than taken on trust. */
+  if (s.recs?.length > 1) {
+    const shown = s.recs.slice(0, 8);
+    row("Joined", `${nf(s.recs.length)} ${esc(s.net)} records:<br>` + shown.map((r) =>
+      `<span class="mono">${esc(r.id)}</span> ${esc(r.name || "unnamed")}${r.street ? ` <span class="imp-rec-at">${esc(r.street)}</span>` : ""}`).join("<br>") +
+      (s.recs.length > shown.length ? `<br>and ${nf(s.recs.length - shown.length)} more` : ""));
+  }
   if (s.host) row("Host", esc(s.host));
   else if (s.fac) row("Facility", esc(FAC_WORDS(s.fac)));
   if (s.dir) row("Where", `“${esc(s.dir)}”`);
@@ -3947,8 +3957,10 @@ function workCard(side) {
         <em>Adds <span class="mono">fixme</span> so somebody passing can pin it properly.</em></span>
     </label>
     ${(s.refs?.length || 0) > 1 ? `<p class="imp-note"><span class="mono">ref:afdc</span> lists all
-       ${nf(s.refs.length)} AFDC records this site was collapsed from — they share an address or
-       stand within 80 m of each other. Trim it if the imagery shows two separate sites.</p>` : ""}
+       ${nf(s.refs.length)} AFDC records behind this site. They were joined because they are the same
+       brand (AFDC's network field) and give the same address, or stand within 80 m of each other
+       under the same host's name — each is listed under <b>What the sources say</b>. Trim the tag
+       if the imagery shows separate sites.</p>` : ""}
 
     <p class="imp-note">Look before you save: if the imagery shows nothing there, skip it.
        These are surveyed one-off edits, not an import.</p>

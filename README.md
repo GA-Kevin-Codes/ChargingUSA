@@ -47,6 +47,12 @@ vehicle charging — grouped into kinds, each with its cables and what each cabl
 delivers. Tags, the dispensers offered for placing, the station totals and the
 GeoJSON export are all read off it, so they cannot disagree with one another.
 
+- Two AFDC records are one site only when they are the same network — AFDC's
+  `ev_network`, which is what the editor proposes as `brand` — and
+  either give the same address or stand within 80 m of each other under the
+  same host's name. Standing nearby is not enough on its own: coordinates are
+  wrong often enough that unrelated records land on one spot. The records
+  behind a joined site are listed in the editor.
 - `capacity` is ports, never cables. A twin-head cabinet is one port.
 - `socket:<type>` is cables of that type; `socket:<type>:output` is that
   connector's own figure, never the cabinet's best.

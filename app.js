@@ -183,11 +183,95 @@ const metres = (a, b) => {
   return Math.hypot(dy, dx);
 };
 
-/** Collapse rows of one network sitting within `m` metres, or sharing a street address. */
+/* When are two records one site?
+
+   Only ever within one network — the caller hands this one network's records
+   at a time — and then on one of two grounds:
+
+     the same address      number and street, in the same city and state,
+                           however each record abbreviates it;
+     standing together     within `m` metres, in the same state, AND either
+                           naming the same host or giving the same number
+                           and street (two records of one building that
+                           spell its town differently).
+
+   Position used to be enough for the second. It is not: a register's
+   coordinates are wrong often enough that two unrelated records land on one
+   spot. "ABC Nissan, 1300 E Camelback Rd" and "Midway Nissan, 2201 W Bell Rd"
+   sit 68 m apart in AFDC and eleven miles apart in Phoenix; a Missouri station
+   and a Massachusetts one are 50 m apart by their coordinates. And where the
+   coordinates are right, one network's stations in neighbouring buildings
+   belong to different hosts — Amazon's garage and the tower next door — and
+   are two sites to anyone standing there. So nearness has to be corroborated
+   by the one other thing a record says about where it is: its name.
+
+   This is the same standard the OpenStreetMap matcher holds itself to, where
+   a second fact — the operator — is what lets a distance count. */
+const ADDR_WORD = {
+  st: "street", rd: "road", ave: "avenue", av: "avenue", blvd: "boulevard", dr: "drive", ln: "lane",
+  ct: "court", pl: "place", pkwy: "parkway", pky: "parkway", hwy: "highway", cir: "circle", trl: "trail",
+  ter: "terrace", sq: "square", expy: "expressway", fwy: "freeway", tpke: "turnpike", rte: "route", wy: "way",
+  n: "north", s: "south", e: "east", w: "west", ne: "northeast", nw: "northwest", se: "southeast", sw: "southwest",
+};
+const ADDR_TYPE = new Set(["street", "road", "avenue", "boulevard", "drive", "lane", "court", "place", "parkway",
+  "highway", "circle", "trail", "terrace", "square", "expressway", "freeway", "turnpike", "route", "way"]);
+
+/* An address in a form two records can be compared by: "21215 Burbank Blvd"
+   and "21215 Burbank Boulevard" are one key, and "300 Massachusetts Avenue
+   Under Solar Canopy" stops at "avenue". A line with no house number is kept
+   whole — it still equals itself. */
+const addressKey = (r) => {
+  const k = streetKey(r);
+  return k && `${k}|${(r.city || "").toLowerCase().trim()}|${r.state || ""}`;
+};
+function streetKey(r) {
+  if (!r.street) return null;
+  const flat = r.street.toLowerCase().replace(/[.,#]/g, " ").replace(/\s+/g, " ").trim();
+  const m = /^(\d+)[a-z]?\s+(.+)$/.exec(flat);
+  if (!m) return flat;
+  let words = m[2].split(" ").map((w) => ADDR_WORD[w] || w);
+  const end = words.findIndex((w, i) => i > 0 && ADDR_TYPE.has(w));
+  if (end >= 0) {
+    // "highway 83", "avenue k": the number or letter is part of the name
+    const id = /^(highway|route|road|avenue|expressway)$/.test(words[end]) && /^(\d+[a-z]?|[a-z])$/.test(words[end + 1] || "");
+    words = words.slice(0, end + 1 + (id ? 1 : 0));
+  }
+  return `${m[1]} ${words.join(" ")}`;
+}
+
+/* The host a station name names, as the words that are not about the
+   hardware: "PIE AE WEST LAKE DC4" and "PIE AE WEST LAKE DC3" are both
+   {pie, ae, west, lake}. */
+const NAME_NOISE = new Set(["station", "stations", "stn", "dc", "dcfc", "fast", "charger", "chargers", "charging",
+  "ev", "evse", "evs", "level", "unit", "lot", "the", "of", "at", "and", "for", "public"]);
+function hostWords(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ")
+    /* A bare number is a stall number, and "dc4" or "station2" is hardware
+       with one attached; both go. A code like "l396" or "mpk18" stays whole —
+       it is how ChargePoint names the host, and often the only word two of a
+       dealer's stations share. */
+    .filter((w) => w.length > 1 && !/^\d+$/.test(w) && !/^[a-z]\d$/.test(w) && !NAME_NOISE.has(w) && !NAME_NOISE.has(w.replace(/\d+/g, "")));
+}
+/* Two names are the same host when they start with the same word and share
+   at least half of the shorter one's. "Ingles" and "Ingles Markets - Skyland
+   Plaza" are; "ABC Nissan" and "Midway Nissan" are not, for all that both are
+   Nissan dealers. A word counts as shared when one is the other cut short —
+   "barn" for "barnstable" — which is how a 20-character name field abbreviates. */
+function sameHost(a, b) {
+  if (!a.length || !b.length || a[0] !== b[0]) return false;
+  const like = (x, y) => x === y || (Math.min(x.length, y.length) >= 4 && (x.startsWith(y) || y.startsWith(x)));
+  // counted from both sides and the smaller taken, so the answer does not
+  // depend on which record happened to come first
+  const hits = (p, q) => p.filter((w) => q.some((v) => like(w, v))).length;
+  return Math.min(hits(a, b), hits(b, a)) / Math.min(a.length, b.length) >= 0.5;
+}
+
 function collapse(rows, m = 80) {
   const parent = rows.map((_, i) => i);
   const find = (a) => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
   const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[rb] = ra; };
+  const host = rows.map((r) => hostWords(r.name));
+  const street = rows.map(streetKey);
 
   const cell = (m / R) * 1.5;
   const grid = new Map();
@@ -200,12 +284,16 @@ function collapse(rows, m = 80) {
     const [gy, gx] = key.split(",").map(Number);
     const near = [];
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) near.push(...(grid.get(`${gy + dy},${gx + dx}`) || []));
-    for (const i of idxs) for (const j of near) if (j > i && metres(rows[i], rows[j]) <= m) union(i, j);
+    for (const i of idxs) for (const j of near) {
+      if (j <= i || rows[i].state !== rows[j].state) continue;
+      if (metres(rows[i], rows[j]) > m) continue;
+      if (sameHost(host[i], host[j]) || (street[i] && street[i] === street[j])) union(i, j);
+    }
   }
   const byAddr = new Map();
   rows.forEach((r, i) => {
-    if (!r.street) return;
-    const k = `${r.street.toLowerCase().replace(/[.,#]/g, " ").replace(/\s+/g, " ").trim()}|${(r.city || "").toLowerCase()}|${r.state}`;
+    const k = addressKey(r);
+    if (!k) return;
     if (!byAddr.has(k)) byAddr.set(k, []);
     byAddr.get(k).push(i);
   });
@@ -580,6 +668,11 @@ function merge(afdc, tesla, ea, ionna, osm, l2 = null) {
            its Level 2 ports — there is no fast-charging figure to give, and the
            placeholder 1 that used to stand in for "none" would be a count. */
         ...(dcPorts ? {} : { l2: true }),
+        /* What was joined, where anything was: each record's own name and
+           address, so the editor can show the evidence for calling them one
+           site rather than asking to be believed. */
+        ...(g.length > 1 ? { recs: g.map((x) => ({ id: x.id, name: x.name, street: x.street || null }))
+                                   .sort((a, b) => a.id - b.id) } : {}),
         net: disp(net), name: base.name, lat: base.lat, lon: base.lon, state: base.state,
         // the street address AFDC publishes, kept for the export: a coordinate
         // in a car park is easier to find when something names the road
