@@ -292,9 +292,22 @@ if (K.accessFor) table("accessFor", (a) => K.accessFor({ src: "AFDC", fac: "OTHE
   [{ hours: "24 hours daily; parking permit required" }, null],
   [{ hours: "8:30am-6pm M-F; see front desk for access" }, null],
   [{ accessDetail: "CALL", hours: "24 hours daily" }, null],
-  [{ fac: "CAR_DEALER", hours: "Dealership business hours" }, null],
+  [{ fac: "CAR_DEALER", hours: "Dealership business hours" }, "customers"],
   [{ hours: "Garage business hours" }, "yes"],                       // "business" here is the hours, not the user
+  // the kind of place settles it, for the few kinds where it can
+  [{ fac: "MULTI_UNIT_DWELLING", hours: "24 hours daily" }, "private"],
+  [{ fac: "MULTI_UNIT_DWELLING" }, "private"],
+  [{ fac: "WORKPLACE", hours: "24 hours daily" }, "private"],
+  [{ fac: "FLEET_GARAGE" }, "private"],
+  [{ fac: "HOTEL", l2: true, hours: "24 hours daily" }, "customers"],
+  [{ fac: "INN", l2: true }, "customers"],
+  [{ fac: "HOTEL", hours: "24 hours daily" }, "yes"],                 // a fast charger in a hotel car park is for the road
+  [{ fac: "CAR_DEALER", hours: "24 hours daily" }, "customers"],
+  [{ fac: "OFFICE_BLDG", l2: true }, "yes"],                          // could be either: not on the list
+  [{ fac: "COLLEGE_CAMPUS", l2: true, hours: "24 hours daily; permit required" }, null],
+  [{ fac: "HOTEL", l2: true, hours: "24 hours daily; see front desk for access" }, null],
   // a Supercharger goes by supercharge.info's flag, whatever AFDC's remark says
+  [{ src: "supercharge.info", other: true, fac: "HOTEL", l2: false }, "yes"],
   [{ src: "supercharge.info", other: false, hours: "24 hours daily. NACS partner enabled." }, "customers"],
   [{ src: "supercharge.info", other: true, hours: "24 hours daily. Open to Teslas only." }, "yes"],
 ]);
@@ -471,7 +484,9 @@ for (const s of M.sites) {
     const want = inv.kinds.some((k) => k.dc) ? (inv.kinds.some((k) => !k.dc) ? "0;60" : "0") : "60";
     if (tags.frequency !== want) fail("proposal: frequency does not say what the site has", `${id(s)} ${tags.frequency}, wanted ${want}`);
   } else if (tags.frequency != null) fail("proposal: a frequency with no ports to base it on", id(s));
-  if (tags.access != null && !/^(yes|customers)$/.test(tags.access)) fail("proposal: access is neither yes nor customers", `${id(s)} ${tags.access}`);
+  if (tags.access != null && !/^(yes|customers|private)$/.test(tags.access)) fail("proposal: access is not yes, customers or private", `${id(s)} ${tags.access}`);
+  if (typeof s.other !== "boolean" && /^(MULTI_UNIT_DWELLING|WORKPLACE|FLEET_GARAGE|MOTOR_POOL|MIL_BASE|PRISON)$/.test(s.fac || "") && tags.access !== "private")
+    fail("proposal: a private kind of place not proposed as access=private", `${id(s)} ${s.fac} → ${tags.access}`);
   // the two the user would otherwise have to correct by hand
   if (s.other === false && tags.access !== "customers") fail("proposal: a Tesla-only site not proposed as access=customers", id(s));
   if (typeof s.other !== "boolean" && /open to teslas only|use only|guests? only|customers? only/i.test(s.hours || "") && tags.access === "yes")

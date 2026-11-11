@@ -64,8 +64,12 @@ GeoJSON export are all read off it, so they cannot disagree with one another.
   `charge`: tariffs change too often for the amount to be worth mapping.
 - `access=yes` is for a site open widely to the public. One limited to a set
   of customers — a hotel's guests, or one make of vehicle, such as a
-  Tesla-only Supercharger — is `access=customers`. Where the source narrows
-  it some other way (staff, a permit, "call ahead") nothing is proposed.
+  Tesla-only Supercharger — is `access=customers`. AFDC's facility type is
+  read too: a multi-unit dwelling, workplace, fleet garage, motor pool,
+  military base or prison is `access=private`; a hotel, inn, B&B, campground
+  or RV park with Level 2 only, and a car dealer, is `customers`. Where the
+  source narrows it some other way (staff, a permit, "call ahead") nothing is
+  proposed.
 - The address is proposed by default. The street is written out in full and
   stops at its type word — "555 W 44th St PUBLIC WORKS" is `West 44th Street`,
   and the rest is shown as where on the property to look.

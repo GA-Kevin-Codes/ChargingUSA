@@ -1706,13 +1706,28 @@ const CARD_TAG = {
                  "for guest use only" — and equally a make of vehicle: a site
                  that charges Teslas only is vehicle-exclusive, which the wiki
                  files under `customers`, not `yes`.
+     private     the kind of place says so: AFDC files the site under a
+                 facility type that is not open to the public at all.
      (nothing)   the source narrows it in a way that is not about customers —
-                 staff, residents, a permit, "call ahead" — or the site looks
-                 like a dealership. Which value that is takes a judgement, and
-                 the chips under the tags make it one click.
+                 staff, residents, a permit, "call ahead" — or the name looks
+                 like a dealership's. Which value that is takes a judgement,
+                 and the chips under the tags make it one click.
 
    For a Supercharger, supercharge.info's own flag is the evidence: it tracks
-   which sites have been opened to other makes, and AFDC's remark can lag. */
+   which sites have been opened to other makes, and AFDC's remark can lag.
+
+   AFDC's "public" is a claim about the listing, not about the car park. A
+   charger in an apartment block's garage is listed as public and is for the
+   people who live there; one outside a hotel is for its guests. So the
+   facility type AFDC gives is read as well, for the handful of types where
+   the kind of place settles the question. It is a short list on purpose —
+   an office building or a college might be either, and those are left to the
+   remark and the mapper.
+
+   Hotels and the like are `customers` only where the site is Level 2 alone.
+   A fast charger in a hotel's car park is there for the road, not the rooms. */
+const FAC_PRIVATE = new Set(["MULTI_UNIT_DWELLING", "WORKPLACE", "FLEET_GARAGE", "MOTOR_POOL", "MIL_BASE", "PRISON"]);
+const FAC_GUESTS = new Set(["HOTEL", "INN", "B_AND_B", "CAMPGROUND", "RV_PARK"]);
 const BRAND_ONLY = /\bopen to (teslas?|[\w' ]+?) only\b|\bfor ([\w' -]+?) use only\b|\b(guests?|customers?|patrons?|visitors?)( use)? only\b/i;
 const NOT_CUSTOMERS = /\b(employees?|staff|residents?|tenants?|students?|members?|fleet|dealership|business|officials?|government|permit|approval|desk|call|key ?card|badge)\b/i;
 function accessFor(s) {
@@ -1722,13 +1737,25 @@ function accessFor(s) {
       ? { value: "yes", by: src, why: `${s.src} lists this site as open to other makes` }
       : { value: "customers", by: src, why: `${s.src}: Tesla vehicles only — a vehicle-exclusive site is access=customers` };
   }
+  const kind = FAC_WORDS(s.fac);
+  if (FAC_PRIVATE.has(s.fac)) {
+    return { value: "private", by: "AFDC", why: `AFDC files this under “${kind}” — not somewhere the public can drive in and charge` };
+  }
   const remark = String(s.hours || "");
   const only = BRAND_ONLY.exec(remark);
   // who it is "only" for decides: guests and Rivians are customers, staff are not
   if (only && !NOT_CUSTOMERS.test(only[0])) {
     return { value: "customers", by: "AFDC", why: `AFDC: “${s.hours}” — limited to one set of customers` };
   }
-  if (s.accessDetail === "CALL" || NOT_CUSTOMERS.test(remark.replace(/\bbusiness hours\b/gi, "")) || only) return null;
+  // "Dealership business hours" says when, not who: the phrase is set aside
+  // before the remark is read for words about who may charge
+  if (s.accessDetail === "CALL" || NOT_CUSTOMERS.test(remark.replace(/\b(\w+ )?business hours\b/gi, "")) || only) return null;
+  if (FAC_GUESTS.has(s.fac) && s.l2) {
+    return { value: "customers", by: "AFDC", why: `AFDC files this under “${kind}”, and it is Level 2 only — charging for the people staying there` };
+  }
+  if (s.fac === DEALER_FAC) {
+    return { value: "customers", by: "AFDC", why: `AFDC files this under “${kind}” — a dealership's chargers are for its customers` };
+  }
   if (looksLikeDealer(s)) return null;
   return { value: "yes", by: src, why: `${s.src} lists this as open to the public, with no limit on who` };
 }
