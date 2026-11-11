@@ -108,6 +108,10 @@
    "qid": null,
    "icon": "icons/tesla-supercharger-business.svg"
   },
+  "Tesla Destination": {
+   "qid": "Q478214",
+   "icon": "icons/tesla.svg"
+  },
   "FLO": {
    "qid": "Q55596927",
    "icon": "icons/flo.svg"
@@ -206,6 +210,7 @@
   "NOODOE": "Noodoe",
   "NAYAX_ENERGY": "Nayax",
   "US_SUPERCHARGE": "Supercharger for Business",
+  "Tesla Destination": "Tesla Destination",
   "FLO": "FLO",
   "7CHARGE": "7-Eleven",
   "ELECTRIC_ERA": "Electric Era",

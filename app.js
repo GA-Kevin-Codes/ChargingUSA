@@ -143,7 +143,9 @@ const VIEW = { state: null, net: null, selected: null, metric: "pop", zoom: 1, p
                mapMetric: "mapped", dots: "both", query: "", stateQuery: "",
                // which list the panel beside the map shows, where there is only
                // room for one
-               browse: "states" };
+               browse: "states",
+               // Level 2 stations as well as fast charging; off unless asked for
+               l2: false };
 let MERGED = null;
 
 const CONUS = { lat0: 24, lat1: 50, lon0: -125, lon1: -66 };
@@ -397,7 +399,7 @@ function mergeUnits(rows) {
   for (const u of rows) {
     // `pw` is in the key: two cabinets with the same cables at different powers
     // are two kinds, and folding them together would average one away
-    const key = `${u.kw ?? ""}|${Object.entries(u.conn).sort().map(([k, v]) => `${k}:${v}@${u.pw?.[k] ?? ""}`).join(",")}`;
+    const key = `${u.lv ?? ""}|${u.kw ?? ""}|${Object.entries(u.conn).sort().map(([k, v]) => `${k}:${v}@${u.pw?.[k] ?? ""}`).join(",")}`;
     const hit = by.get(key);
     if (hit) hit.n += u.n;
     else by.set(key, { ...u });
@@ -500,9 +502,20 @@ function bulkDates(records) {
 
 /* ---------------------------------------------------------------------- merge */
 
-function merge(afdc, tesla, ea, ionna, osm) {
+/* `l2` is the Level 2 payload, or null. With it the board covers every public
+   charging station rather than the fast ones alone. Its records go through the
+   same door as the fast-charging ones — the same exclusions, and the same
+   collapsing, so a network's Level 2 posts beside its DC cabinets become one
+   site with both rather than two sites twenty metres apart. A site is "fast"
+   if any record behind it has a DC port and Level 2 otherwise. */
+function merge(afdc, tesla, ea, ionna, osm, l2 = null) {
   const sites = [];
-  let afdcRecords = afdc.sites.length, afdcSites = 0, cpRecords = 0, cpSites = 0;
+  const records = l2
+    ? [...afdc.sites, ...l2.sites.map((r) => ({ ...r, lvl2: true, ports: 0,
+        // the payload writes "24 hours daily" as a flag; here it is words again
+        ...(r.h === 1 ? { hours: "24 hours daily" } : {}) }))]
+    : afdc.sites;
+  let afdcRecords = records.length, afdcSites = 0, cpRecords = 0, cpSites = 0;
 
   const excluded = { afdc: 0, ea: 0, tesla: 0, eaAc: 0 };
 
@@ -510,9 +523,9 @@ function merge(afdc, tesla, ea, ionna, osm) {
 
   const unknownAccess = new Set();
   const overridden = [];               // AFDC ids for networks a better source supplies
-  const bulk = bulkDates(afdc.sites);
+  const bulk = bulkDates(records);
   const byNet = new Map();
-  for (const s of afdc.sites) {
+  for (const s of records) {
     if (s.restricted || AFDC_BLOCKED_DETAIL.has(s.accessDetail) || NOT_PUBLIC_NAME.test(s.name || "")) {
       excluded.afdc++; continue;
     }
@@ -523,11 +536,15 @@ function merge(afdc, tesla, ea, ionna, osm) {
     const groups = collapse(rows);
     afdcSites += groups.length;
     if (net === "ChargePoint Network") { cpRecords = rows.length; cpSites = groups.length; }
+    /* A better source replaces three networks' fast charging, and nothing
+       replaces their Level 2: a group with no DC record in it is a site in its
+       own right, whoever runs it, and goes the ordinary way. */
+    const fast = (g) => g.some((x) => !x.lvl2);
     if (OVERRIDE.has(net)) {
       /* Set aside rather than dropped. A better source replaces these three
          networks, but only AFDC publishes an id OSM has a tag for, and
          discarding the record threw that id away with it. Reunited below. */
-      for (const g of groups) {
+      for (const g of groups.filter(fast)) {
         const base = g.reduce((a, b) => (b.ports > a.ports ? b : a));
         /* The id was never the only thing worth keeping. AFDC also publishes
            the connector breakdown, the open date and a street address, and the
@@ -547,19 +564,27 @@ function merge(afdc, tesla, ea, ionna, osm) {
           afdcPorts: g.reduce((a, b) => a + (b.ports || 0), 0) || null,
           extra: afdcExtras(base, g) });
       }
-      continue;
     }
-    for (const g of groups) {
-      const base = g.reduce((a, b) => (b.ports > a.ports ? b : a));
+    for (const g of OVERRIDE.has(net) ? groups.filter((x) => !fast(x)) : groups) {
+      // the record with the most on it speaks for the group: DC ports first,
+      // then units, so a Level 2 group is not named after whichever came first
+      const size = (x) => (x.ports || 0) * 1000 + (x.units || []).reduce((a, u) => a + u.n, 0);
+      const base = g.reduce((a, b) => (size(b) > size(a) ? b : a));
       const open = g.map((x) => x.open).filter(Boolean).sort()[0] || null;
+      const dcPorts = g.reduce((a, b) => a + (b.ports || 0), 0);
+      const units = mergeUnits(g.flatMap((x) => x.units || []));
       sites.push({
         ...afdcExtras(base, g),
         openBulk: bulk(net, open),
+        /* No DC port on any record behind it: a Level 2 site. `ports` is then
+           its Level 2 ports — there is no fast-charging figure to give, and the
+           placeholder 1 that used to stand in for "none" would be a count. */
+        ...(dcPorts ? {} : { l2: true }),
         net: disp(net), name: base.name, lat: base.lat, lon: base.lon, state: base.state,
         // the street address AFDC publishes, kept for the export: a coordinate
         // in a car park is easier to find when something names the road
         city: base.city || null, street: base.street || null,
-        ports: g.reduce((a, b) => a + (b.ports || 0), 0) || 1,
+        ports: dcPorts || units.reduce((a, u) => a + u.n, 0) || 1,
         open: g.map((x) => x.open).filter(Boolean).sort()[0] || null,
         conf: g.map((x) => x.conf).filter(Boolean).sort().pop() || null,
         fac: base.fac, src: "AFDC",
@@ -573,7 +598,7 @@ function merge(afdc, tesla, ea, ionna, osm) {
            collapsed from. It says how many physical units stand here and what
            each one is — the counts behind an accurate `capacity`, and the
            number of charge points there are to place. */
-        units: mergeUnits(g.flatMap((x) => x.units || [])),
+        units,
         conn: [...new Set(g.flatMap((x) => (x.conn || []).map((c) => CONN[c]).filter(Boolean)))],
         /* Where each source put this site, kept rather than collapsed to one
            point. A group is records within 80 m of each other or sharing an
@@ -883,13 +908,15 @@ function merge(afdc, tesla, ea, ionna, osm) {
   const business = sites.filter((s) => s.business).length;
   return { sites, pipeline, mapped, detailed, refMatched, noted, hostMapped, reunited, excluded, business, businessDeduped,
            localMapped,
+           // whether Level 2 is in this merge, and how many sites it added
+           l2: !!l2, l2Sites: sites.filter((s) => s.l2).length,
            unknownAccess: [...unknownAccess],
            osmTotal: osm.sites.length, osmDc: osm.sites.filter((o) => o.dc).length,
            osmStamp: osm.generated,
            // Every source dates itself differently and refreshes on its own
            // clock — All the Places publishes weekly, so EA and IONNA are never
            // newer than its last run however current everything else is.
-           stamps: { OpenStreetMap: osm.generated, AFDC: afdc.generated,
+           stamps: { OpenStreetMap: osm.generated, AFDC: afdc.generated, ...(l2 ? { "AFDC Level 2": l2.generated } : {}),
                      "supercharge.info": tesla.generated, "All the Places": ea.run || ionna.run },
            dedupe: { afdcRecords, afdcSites, cpRecords, cpSites } };
 }
@@ -960,7 +987,7 @@ function atlasData(M) {
     if (!e) continue;
     e.sites++; e.ports += s.ports || 0; if (s.osm) e.mapped++;
   }
-  return { outline, states, points: { nets, states: codes, d, stride } };
+  return { outline, states, points: { nets, states: codes, d, stride }, portWord: M.l2 ? "ports" : "DC ports" };
 }
 
 const METRIC_TITLE = {
@@ -1013,7 +1040,7 @@ function render(M) {
 
   /* ---- scope ---- */
   $("prov").innerHTML =
-    `<b>${nf(S.length)}</b> sites · <b>${nf(ports)}</b> DC ports · ${esc(shortStamp(M.stamps))}`;
+    `<b>${nf(S.length)}</b> sites · <b>${nf(ports)}</b> ${M.l2 ? "ports" : "DC ports"} · ${esc(shortStamp(M.stamps))}`;
   const stName = VIEW.state ? (STATES?.[VIEW.state]?.name || VIEW.state) : "";
   /* Announced, not shown: the two pills beside it say the same thing to the
      eye, and this says it to a screen reader when a filter changes. */
@@ -1051,6 +1078,14 @@ function render(M) {
   $("map-hint").textContent = VIEW.state
     ? "Click outside the state to zoom back out"
     : "Click a state to zoom into its sites";
+  safe("level 2 switch", () => {
+    const sw = $("l2-toggle");
+    if (sw) { sw.setAttribute("aria-checked", String(!!M.l2)); sw.classList.toggle("is-on", !!M.l2); }
+    const by = $("net-by");
+    if (by) by.textContent = M.l2 ? "By ports" : "By DC ports";
+    const foot = $("net-foot");
+    if (foot) foot.textContent = `Ranked by ${M.l2 ? "" : "DC "}ports. Bars show the share of that network’s sites already on OpenStreetMap.`;
+  });
   $("legend-mapped").textContent = nf(mapped);
   $("legend-missing").textContent = nf(missing);
 
@@ -1076,8 +1111,9 @@ function render(M) {
     ["guide", "On the map", pct == null ? "—" : `${pct.toFixed(1)}%`,
      `${nf(mapped)} of ${nf(S.length)} sites${localHere ? ` · ${nf(localHere)} awaiting refresh` : ""}`, pct],
     ["work", "Missing", nf(missing), "no station on OSM"],
-    ["plain", "Sites", nf(S.length), VIEW.net || VIEW.state ? "in this slice" : "public DC fast charging"],
-    ["plain", "DC ports", nf(ports), S.length ? `${(ports / S.length).toFixed(1)} per site` : "—"],
+    ["plain", "Sites", nf(S.length), VIEW.net || VIEW.state ? "in this slice"
+      : M.l2 ? `fast and Level 2 · ${nf(S.filter((s) => s.l2).length)} are Level 2` : "public DC fast charging"],
+    [`plain`, M.l2 ? "Ports" : "DC ports", nf(ports), S.length ? `${(ports / S.length).toFixed(1)} per site` : "—"],
     VIEW.net
       ? ["plain", "Share of US ports", `${((ports / nationalPorts) * 100).toFixed(1)}%`, `of ${nf(nationalPorts)}`]
       : ["plain", "Networks", nf(nationalNets), `${nf(bigNets)} carry 100+ ports`],
@@ -1113,7 +1149,8 @@ function render(M) {
 
   const D = M.dedupe;
   $("dedupenote").innerHTML = `<dl class="method-list">${[
-    ["Dedupe", `${nf(D.afdcRecords)} AFDC records to ${nf(D.afdcSites)} sites. ChargePoint ${nf(D.cpRecords)} to ${nf(D.cpSites)}; every other network under 2%.`],
+    ["Dedupe", `${nf(D.afdcRecords)} AFDC records to ${nf(D.afdcSites)} sites. ChargePoint ${nf(D.cpRecords)} to ${nf(D.cpSites)}${M.l2 ? "" : "; every other network under 2%"}.`],
+    ...(M.l2 ? [["Level 2", `${nf(M.l2Sites)} sites have no DC port and are here because Level 2 is switched on. They come from AFDC, Tesla's destination chargers among them, and are matched against OpenStreetMap by the same rules. Where a network's Level 2 posts stand with its fast chargers they are one site.`]] : []),
     ["OSM match", `${OSM_NEAR} m against ${nf(M.osmTotal)} mapped stations (${nf(M.osmDc)} with socket tags), widened by the size of any mapped area, or ${OSM_BRAND_NEAR} m for a match on the same operator — but never between two different networks, however close they stand. ${nf(M.refMatched)} sites skipped all of that and matched outright on a <span class="mono">ref:afdc</span> or <span class="mono">ref:supercharge_info</span> the mapper had already recorded.`],
     ["On a host", `Some charging is recorded on the business hosting it rather than mapped as a station. Where that business also carries the <span class="mono">ref:afdc</span> this site is listed under, it counts as mapped — ${nf(M.hostMapped)} sites. Where the tag stands alone it is only <i>noted</i>, and ${nf(M.noted)} sites sit there.`],
     ["Excluded", `${nf(M.excluded.afdc)} gated or key-only, ${nf(M.excluded.ea)} customers-only or test sites, ${nf(M.excluded.tesla)} permit-only` +
@@ -1351,8 +1388,10 @@ const DC_SOCKET = new Set(["type1_combo", "chademo", "nacs"]);
    connector count never is. Counting cables is how a site of twin-head
    dispensers ends up claiming twice the capacity it has — which is most of a
    network like EV Gateway, whose DC fleet is nearly all CHAdeMO+CCS. */
-const isDcUnit = (u) =>
-  Object.keys(u.conn || {}).some((k) => DC_SOCKET.has(CONN_SOCKET[k]));
+/* The unit's own level where the payload gives one. The plug alone cannot
+   say: NACS is a Supercharger stall and a hotel wall connector both. */
+const isDcUnit = (u) => u.lv ? false
+  : Object.keys(u.conn || {}).some((k) => DC_SOCKET.has(CONN_SOCKET[k]));
 
 function siteBays(units) {
   let dc = 0, ac = 0;
@@ -1415,9 +1454,12 @@ const SOCKET_ORDER = ["type1_combo", "nacs", "chademo", "type1", "nema_14_50", "
 const socketRank = (t) => { const i = SOCKET_ORDER.indexOf(t); return i < 0 ? 99 : i; };
 const sourceName = (src) => /^ATP/.test(src || "") ? "All the Places" : src || "the source";
 
-const kindKey = (k) => Object.keys(k.conn).sort()
+/* AC or DC. Stated by the source where it states it (`dc` on the kind, from
+   AFDC's charging level); otherwise read off the plugs, which is right for
+   everything but NACS and is all an older payload allows. */
+const kindIsDc = (k) => k.dc ?? Object.keys(k.conn).some((t) => DC_SOCKET.has(t));
+const kindKey = (k) => (kindIsDc(k) ? "" : "ac|") + Object.keys(k.conn).sort()
   .map((t) => `${t}:${k.conn[t]}@${k.kw?.[t] ?? ""}`).join(",");
-const kindIsDc = (k) => Object.keys(k.conn).some((t) => DC_SOCKET.has(t));
 
 /* Fold identical ports together and put them in a stable order: DC first,
    strongest first, most numerous first. The order is the order the editor
@@ -1456,7 +1498,7 @@ function afdcKinds(units) {
       // J3271 and TESLA are one socket in OSM; the stronger figure stands
       if (p > 0) kw[t] = Math.max(kw[t] || 0, p);
     }
-    if (Object.keys(conn).length) out.push({ n: u.n, conn, kw, src: "AFDC" });
+    if (Object.keys(conn).length) out.push({ n: u.n, conn, kw, src: "AFDC", ...(u.lv ? { dc: false } : {}) });
   }
   return foldKinds(out);
 }
@@ -1676,7 +1718,7 @@ function siteInventory(s) {
       flags.push({ level: "info", text:
         `${socketLabel(t)} power varies: ${e.powers.map(([kw, c]) => `${nf(c)} at ${fmtKw(kw)}`).join(", ")}` +
         `${e.unknown ? `, ${nf(e.unknown)} unstated` : ""}. The fastest is proposed as the output.` });
-    } else if (e.n && e.unknown === e.n && DC_SOCKET.has(t) && !e.peak && !kinds.some((k) => k.mixed)) {
+    } else if (e.n && e.unknown === e.n && kinds.some((k) => k.dc && k.conn[t]) && !e.peak && !kinds.some((k) => k.mixed)) {
       flags.push({ level: "info", text: `No source states the ${socketLabel(t)} power here.` });
     }
   }
@@ -1777,7 +1819,7 @@ function missingGeoJSON(sites, scope) {
       generated: new Date().toISOString(),
       scope,
       count: features.length,
-      note: "Unmapped DC fast charging sites - leads from the sources named per feature, " +
+      note: `Unmapped ${MERGED?.l2 ? "public charging" : "DC fast charging"} sites - leads from the sources named per feature, ` +
             "not survey data. Positions are the operator's own and want checking against imagery.",
       sources: "AFDC (US DOE/NLR), supercharge.info, All the Places; matched against OpenStreetMap",
     },
@@ -2049,7 +2091,7 @@ function renderNetworks(S, ranked) {
   const note = $("net-note");
   if (note) {
     note.textContent =
-      `Showing the ${shown.length} networks with ${TABLE_MIN_PORTS}+ DC ports. ` +
+      `Showing the ${shown.length} networks with ${TABLE_MIN_PORTS}+ ${MERGED.l2 ? "" : "DC "}ports. ` +
       `The other ${hidden} operators (${nf(hiddenSites)} sites, ${nf(hiddenPorts)} ports) are counted in every ` +
       `figure on this page but omitted here.`;
   }
@@ -2175,7 +2217,14 @@ async function load(fresh = false) {
     // Brand marks are optional chrome — never let a miss block the board.
     BRANDS = await grab("/brands").catch(() => ({}));
     STATES = await grab("/states").catch(() => null);
-    const merged = merge(afdc, tesla, ea, ionna, osm);
+    RAW = { afdc, tesla, ea, ionna, osm, l2: fresh ? null : RAW?.l2 || null };
+    /* Level 2 only if it was left switched on. It is 20 MB the board does not
+       otherwise need, and a miss — the file not published yet — must not take
+       the fast-charging board down with it. */
+    VIEW.l2 = !!store.get(K_L2);
+    if (VIEW.l2 && !RAW.l2) RAW.l2 = await grab("/afdc-l2", fresh).catch(() => null);
+    if (VIEW.l2 && !RAW.l2) VIEW.l2 = false;
+    const merged = merge(afdc, tesla, ea, ionna, osm, VIEW.l2 ? RAW.l2 : null);
     MERGED = merged;
     ATLAS_DIRTY = true;
     initControls();              // populate the selector first, independent of render
@@ -2194,6 +2243,47 @@ async function load(fresh = false) {
     if (bad) { bad.innerHTML = why; bad.hidden = false; }
     const wait = $("map-wait");
     if (wait && !MERGED) wait.textContent = "No data to draw.";
+  }
+}
+
+/* The source payloads as fetched, kept so that switching Level 2 on or off is
+   a second merge rather than a second download. */
+let RAW = null;
+const K_L2 = "cb.level2";
+
+/* Level 2 on or off. On fetches the payload the first time and merges again
+   with it; off merges again without. The merge is redone rather than the
+   sites filtered, because with Level 2 in, a network's posts are folded into
+   its fast-charging site at the same address — the two results are not one a
+   subset of the other. */
+async function setLevel2(on) {
+  const sw = $("l2-toggle");
+  if (!RAW || sw?.disabled) return;
+  if (sw) sw.disabled = true;
+  try {
+    if (on && !RAW.l2) {
+      $("status").innerHTML = `<span class="pulse pulse--wait"></span><span>loading Level 2 stations</span>`;
+      RAW.l2 = await grab("/afdc-l2").catch(() => null);
+    }
+    if (on && !RAW.l2) {
+      $("status").innerHTML = `<span class="chip" style="color:var(--warn)">no Level 2 data</span> ` +
+        `it has not been published yet — it arrives with the next daily refresh`;
+      return;
+    }
+    VIEW.l2 = !!on;
+    store.set(K_L2, VIEW.l2);
+    $("status").innerHTML = `<span class="pulse pulse--wait"></span><span>${on ? "adding" : "removing"} Level 2</span>`;
+    // let the status paint before a merge that takes a second or two
+    await new Promise((r) => setTimeout(r, 30));
+    MERGED = merge(RAW.afdc, RAW.tesla, RAW.ea, RAW.ionna, RAW.osm, VIEW.l2 ? RAW.l2 : null);
+    ATLAS_DIRTY = true;
+    // a network or state that exists only with Level 2 in cannot stay selected without it
+    if (VIEW.net && !MERGED.sites.some((s) => s.net === VIEW.net)) VIEW.net = null;
+    if (VIEW.state && !MERGED.sites.some((s) => s.state === VIEW.state)) VIEW.state = null;
+    initControls();
+    render(MERGED);
+  } finally {
+    if (sw) sw.disabled = false;
   }
 }
 
@@ -2319,6 +2409,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", repaintF
 const on = (id, ev, fn) => { const n = $(id); if (n) n.addEventListener(ev, fn); };
 on("export-missing", "click", downloadMissing);
 on("theme-toggle", "click", toggleTheme);
+on("l2-toggle", "click", () => setLevel2(!VIEW.l2));
 on("refresh", "click", () => {
   const b = $("refresh");
   if (b) { b.classList.add("spin"); b.disabled = true; }

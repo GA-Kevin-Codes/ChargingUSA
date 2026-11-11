@@ -5,6 +5,7 @@
      bun tools/stress.js                 against data/
      bun tools/stress.js --data=DIR      against another directory of payloads
      bun tools/stress.js --verbose       list every example, not the first few
+     bun tools/stress.js --l2            with the Level 2 switch on (needs afdc-l2.json)
 
    (node works too.) Exits 1 if any invariant fails.
 
@@ -28,6 +29,7 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split("=")[1];
 const DATA = arg("data") || `${ROOT}data`;
 const VERBOSE = process.argv.includes("--verbose");
+const WITH_L2 = process.argv.includes("--l2");
 
 /* ------------------------------------------------------------ the sandbox */
 
@@ -63,6 +65,8 @@ const readData = (name) => {
 };
 
 const memory = new Map();
+// the board reads its Level 2 switch from here, exactly as a browser left on would
+if (WITH_L2) memory.set("cb.level2", "true");
 const sandbox = {
   console, URL, URLSearchParams, Blob, TextEncoder, setTimeout, clearTimeout, performance,
   crypto: globalThis.crypto,
@@ -105,6 +109,7 @@ const T = sandbox.window.__board;
 const K = sandbox.window.OSMKit;
 for (let i = 0; i < 600 && !T.MERGED; i++) await new Promise((r) => setTimeout(r, 50));
 if (!T.MERGED) { console.error("the board never finished loading its data"); process.exit(1); }
+if (WITH_L2 && !T.MERGED.l2) { console.error(`--l2 was asked for and ${DATA}/afdc-l2.json could not be loaded`); process.exit(1); }
 
 /* --------------------------------------------------------------- reporting */
 
@@ -270,7 +275,7 @@ for (const s of M.sites) {
   if (s.portsUnknown && !s.portsSrc) note("no source counts the ports", id(s));
   if (!inv.kinds.length) note("no dispenser kinds (totals only)", id(s));
   if (Object.values(inv.sockets).some((e) => e.powers.length > 1)) note("power varies within a connector type", id(s));
-  if (Object.entries(inv.sockets).some(([t, e]) => T.DC_SOCKET.has(t) && e.n && e.unknown === e.n))
+  if (Object.entries(inv.sockets).some(([t, e]) => inv.kinds.some((k) => k.dc && k.conn[t]) && e.n && e.unknown === e.n))
     note("a DC connector with no stated power", id(s));
   if (inv.kinds.some((k) => Object.values(k.conn).some((c) => c > 1))) note("two cables of one type on one port", id(s));
   if (inv.kinds.some((k) => k.vague)) note("connector counts are presence only", id(s));
@@ -378,6 +383,20 @@ for (const s of M.sites) {
     fail("proposal: capacity exceeds the sockets proposed", `${id(s)} capacity=${tags.capacity} sockets=${cables}`);
   if (tags.frequency === "0" && inv.kinds.some((k) => !k.dc))
     fail("proposal: frequency=0 on a site with AC ports", id(s));
+  if (tags.frequency === "60" && inv.kinds.some((k) => k.dc))
+    fail("proposal: frequency=60 on a site with DC ports", id(s));
+  if (inv.kinds.length && inv.kinds.every((k) => !k.dc) && tags.frequency !== "60")
+    fail("proposal: an all-AC site without frequency=60", id(s));
+  /* Level 2 sites are AC by definition, whatever plug they carry. This is the
+     check a Tesla destination charger fails if its NACS cable is read as a
+     Supercharger's. Read off the raw units, not the inventory. */
+  if (s.l2) {
+    if (inv.kinds.some((k) => k.dc)) fail("level 2: a site with no DC port has a DC kind", id(s));
+    if ((s.units || []).some((u) => !u.lv)) fail("level 2: a unit with no charging level on a Level 2 site", id(s));
+    if (tags.frequency === "0") fail("level 2: frequency=0 proposed", id(s));
+  }
+  if (!s.l2 && s.src === "AFDC" && !(s.units || []).some((u) => !u.lv) && (s.units || []).length && (s.units || []).some((u) => u.lv != null))
+    fail("level 2: a site of Level 2 units only is counted as fast charging", id(s));
   if (tags.start_date) {
     if (!/^\d{4}(-\d{2}-\d{2})?$/.test(tags.start_date)) fail("proposal: start_date is not a date", `${id(s)} ${tags.start_date}`);
     if (s.openBulk) fail("proposal: a batch-load date written as start_date", `${id(s)} ${tags.start_date}`);
@@ -431,6 +450,7 @@ for (const s of M.sites) {
       if (o && !KW.test(v)) fail("point: an output that is not '<n> kW'", `${id(s)} ${k}=${v}`);
     }
     if (pt.frequency === "0" && !kind.dc) fail("point: frequency=0 on an AC port", id(s));
+    if (pt.frequency !== (kind.dc ? "0" : "60")) fail("point: frequency does not match the kind", `${id(s)} ${pt.frequency} dc=${kind.dc}`);
     // two ports on one cabinet is the same sockets twice and two cars
     const twin = K.cleanTags(K.pointTags(K.kindCfg(kind, 2)));
     if (twin.capacity !== "2") fail("point: two ports on a cabinet is not capacity 2", id(s));
@@ -462,7 +482,7 @@ const line = (map) => [...map].sort((a, b) => b[1].n - a[1].n)
 
 console.log(`${M.sites.length} sites from ${DATA}` +
   ` · AFDC units ${M.sites.some((s) => (s.units || []).some((u) => u.pw)) ? "carry per-connector power" : "carry one power per unit (older payload)"}`);
-console.log(`${proposed} proposals checked\n`);
+console.log(`${proposed} proposals checked${M.l2 ? ` · Level 2 on: ${M.l2Sites} Level 2 sites` : ""}\n`);
 if (tagUse.size) console.log("tags proposed, by how many sites:\n  " +
   [...tagUse].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(" · ") + "\n");
 console.log("where the sources leave a judgement to the mapper:\n" + (line(notes) || "  nothing") + "\n");

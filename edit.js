@@ -1372,6 +1372,9 @@ const NETWORKS = {
   Tesla: { brand: "Tesla", brandQid: "Q478214", sockets: ["nacs"] },
   // Tesla hardware run by a host; NSI files every Supercharger under "Tesla"
   "Supercharger for Business": { brand: "Tesla", brandQid: "Q478214", sockets: ["nacs"] },
+  // Wall connectors at hotels and car parks. NSI's "Tesla" entry lists
+  // "tesla destination charger" among the names it answers to.
+  "Tesla Destination": { brand: "Tesla", brandQid: "Q478214", sockets: ["nacs"] },
   "Electrify America": { brand: "Electrify America" },
   IONNA: { brand: "IONNA" },
   EVgo: { brand: "EVgo" },
@@ -1761,7 +1764,17 @@ function proposeTags(s, why = {}) {
      No `ref:plugshare`. It is a real tag on 1,423 US elements, but not one of
      the board's four sources publishes a PlugShare id, and a ref nobody can
      check is worse than no ref. */
-  if (s.refs?.length) { t["ref:afdc"] = s.refs.join(";"); say("ref:afdc", "AFDC", "The AFDC record this site answers"); }
+  if (s.refs?.length) {
+    /* A value is 255 characters at most, and a campus of forty ChargePoint
+       stations is forty ids. As many whole ids as fit are written, lowest
+       first; the rest still match this site by standing on it. */
+    let refs = s.refs.join(";"), kept = s.refs.length;
+    while (refs.length > 255) refs = s.refs.slice(0, --kept).join(";");
+    t["ref:afdc"] = refs;
+    say("ref:afdc", "AFDC", kept < s.refs.length
+      ? `The first ${nf(kept)} of the ${nf(s.refs.length)} AFDC records this site answers — a tag holds 255 characters`
+      : "The AFDC record this site answers");
+  }
   if (s.sc) { t["ref:supercharge_info"] = String(s.sc); say("ref:supercharge_info", "SC.info", "The supercharge.info record this site answers"); }
 
   /* No `name`. A charging station is identified by who runs it, not by a name
@@ -1815,12 +1828,15 @@ function proposeTags(s, why = {}) {
       say(`socket:${k}`, "usual", `What ${s.net} sites carry; no source itemises this one`);
     }
   }
-  /* DC throughout, so the one technical fact that never needs looking up.
-     Not on a site with Level 2 posts as well: the tag describes the whole
-     station, and half of that one is alternating current. */
+  /* DC throughout is 0; AC throughout is the mains, which in the US is 60 Hz.
+     A site with both gets neither: the tag describes the whole station, and
+     no one number is true of that one. */
   if (inv.kinds.length && inv.kinds.every((k) => k.dc)) {
     t.frequency = "0";
     say("frequency", "DC", "Every port here is direct current");
+  } else if (inv.kinds.length && inv.kinds.every((k) => !k.dc)) {
+    t.frequency = "60";
+    say("frequency", "AC", "Every port here is alternating current — 60 Hz in the US");
   }
 
   /* Public, as the source lists it — unless the same source goes on to say
@@ -1998,7 +2014,7 @@ function kindCfg(kind, ports = 1) {
     conn: times(kind.conn), kw: { ...(kind.kw || {}) },
     ...(kind.amp ? { amp: { ...kind.amp } } : {}),
     ...(kind.volt ? { volt: { ...kind.volt } } : {}),
-    bays: ports, kind: kindKey(kind),
+    bays: ports, kind: kindKey(kind), dc: !!kind.dc,
   };
 }
 
@@ -2050,15 +2066,21 @@ function pointTags(cfg, gear = null, from = null) {
        it publishes one, otherwise the remembered profile for this cabinet —
        and that only on a DC connector. A cabinet's rated 500 A is its DC
        cable's; stamping it on the type 1 lead beside it was simply wrong. */
-    const amps = withUnit(cfg.amp?.[key] ?? (DC_SOCKET.has(key) ? gear?.current : null), "A");
-    const volts = withUnit(cfg.volt?.[key] ?? (DC_SOCKET.has(key) ? gear?.voltage : null), "V");
+    const fast = cfg.dc ?? DC_SOCKET.has(key);
+    const amps = withUnit(cfg.amp?.[key] ?? (fast && DC_SOCKET.has(key) ? gear?.current : null), "A");
+    const volts = withUnit(cfg.volt?.[key] ?? (fast && DC_SOCKET.has(key) ? gear?.voltage : null), "V");
     if (amps) t[`socket:${key}:current`] = amps;
     if (volts) t[`socket:${key}:voltage`] = volts;
   }
   const bays = cfgBays(cfg);
   if (bays) t.capacity = String(bays);
-  // DC is mains frequency zero — but only a cabinet with nothing else on it
-  if (types.length && types.every(([key]) => DC_SOCKET.has(key))) t.frequency = "0";
+  /* DC is frequency zero and AC is the US mains at 60 — each only on a cabinet
+     with nothing else on it. Whether a cabinet is AC comes from its kind where
+     it has one, since a NACS plug is either; built by hand, the plugs are all
+     there is to go on. */
+  const isAc = cfg.dc === false || (cfg.dc == null && types.every(([key]) => !DC_SOCKET.has(key)));
+  const isDc = cfg.dc === true || (cfg.dc == null && types.every(([key]) => DC_SOCKET.has(key)));
+  if (types.length) { if (isAc) t.frequency = "60"; else if (isDc) t.frequency = "0"; }
   return { ...t, ...gearTags(gear), ...inherited(from) };
 }
 
@@ -2174,6 +2196,7 @@ function stationFacts(inv, split = false) {
   }
   if (inv.capacity) t.capacity = String(inv.capacity);
   if (inv.kinds.length && inv.kinds.every((k) => k.dc)) t.frequency = "0";
+  else if (inv.kinds.length && inv.kinds.every((k) => !k.dc)) t.frequency = "60";
   return t;
 }
 
@@ -2830,7 +2853,7 @@ function upgradeCard(side) {
          counting against that row, and how many cars it serves goes back to
          being read off the cables until it is set. */
       u.custom = true;
-      u.cfg = { conn, kw, kind: null };
+      u.cfg = { conn, kw, kind: null, ...(inv.kinds.some((k) => k.dc) ? {} : { dc: false }) };
       paintSide();
     };
   });

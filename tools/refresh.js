@@ -26,7 +26,7 @@ const report = (note) => { try { writeFileSync(PROGRESS, JSON.stringify({ note, 
 const src = readFileSync(new URL("./worker.js", import.meta.url).pathname, "utf8")
   .replace(/export default\s*\{/, "const _routes = {")
   .replace(/export\s*\{[^}]*\};?/g, "");
-(0, eval)(src + "\n;Object.assign(globalThis,{ afdc, tesla, atp, imagery });");
+(0, eval)(src + "\n;Object.assign(globalThis,{ afdc, afdcL2, tesla, atp, imagery });");
 
 const env = process.env;
 /* `imagery` is left out of the default set: it is the Editor Layer Index, it
@@ -34,6 +34,8 @@ const env = process.env;
    to fetch. `--imagery` asks for it. */
 const JOBS = [
   ["afdc",    "AFDC",                  () => afdc(env)],
+  // the board's "Level 2 too" switch reads this; it is not loaded otherwise
+  ["afdc-l2", "AFDC Level 2",          () => afdcL2(env)],
   ["tesla",   "supercharge.info",      () => tesla(env)],
   ["ea",      "Electrify America",     () => atp(env, "electrify_america_us")],
   ["ionna",   "IONNA",                 () => atp(env, "ionna_us")],

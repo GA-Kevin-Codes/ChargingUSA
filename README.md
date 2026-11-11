@@ -17,6 +17,16 @@ whole palette is the block of custom properties at the top of `index.html`;
 the map and the editor paint their canvases from the same tokens, so change a
 value there rather than in the scripts.
 
+## Level 2
+
+The board is about fast charging by default. The **Level 2 too** switch adds
+AFDC's Level 2 stations — about 68,000 records, Tesla's destination chargers
+among them — from `data/afdc-l2.json`, which the daily refresh writes and the
+page loads only when the switch is on. A network's Level 2 posts beside its
+fast chargers become one site with both. Level 2 sites are proposed with
+`frequency=60`, fast ones with `frequency=0`, and a site with both gets
+neither.
+
 ## Sources
 
 | | |
@@ -60,8 +70,12 @@ payload:
 bun tools/stress.js
 ```
 
-It exits non-zero if an invariant fails, and lists how often each kind of
-source disagreement occurs. Run it after changing the merge, the inventory or
+```bash
+bun tools/stress.js --l2
+```
+
+The second form runs with the Level 2 switch on. Either exits non-zero if an
+invariant fails, and lists how often each kind of source disagreement occurs. Run it after changing the merge, the inventory or
 the tag proposals.
 
 ## Licensing

@@ -305,7 +305,8 @@
         const p = this._d.points, { d, stride } = p;
         const brand = cfg(this, "brand") || "";
         const want = brand ? this._netIdx.get(brand) : -2;
-        const r = focus ? 3.1 : 1.7;
+        // five times the sites with Level 2 in: smaller dots, or the country is one blot
+        const r = focus ? 3.1 : d.length / stride > 30000 ? 1.15 : 1.7;
         const fi = focus ? this._stCode.indexOf(focus) : -1;
         const pass = (flagWanted) => {
           for (let i = 0; i < d.length; i += stride) {
@@ -378,7 +379,7 @@
         if (best >= 0) {
           const net = this._d.points.nets[this._pts[best + 2]];
           const ports = this._pts[best + 3], on = (this._pts[best + 4] & 1) === 1;
-          this._tip.innerHTML = "<b>" + h(net) + "</b> · " + ports + " DC ports<br>" +
+          this._tip.innerHTML = "<b>" + h(net) + "</b> · " + ports + " " + h(this._d.portWord || "DC ports") + "<br>" +
             '<span class="' + (on ? "tip-sub" : "tip-off") + '">' + (on ? "on OpenStreetMap" : "missing from the map") + "</span>";
           this._place(this._pts[best], this._pts[best + 1]);
           return;

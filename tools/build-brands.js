@@ -53,6 +53,8 @@ const BRANDS = [
   { name: "Noodoe",            qid: null,          icon: "noodoe",            nets: ["NOODOE"] },
   { name: "Nayax",             qid: "Q39052983",   icon: "nayax",             nets: ["NAYAX_ENERGY"] },
   { name: "Supercharger for Business", qid: null,  icon: "tesla-supercharger-business", nets: ["US_SUPERCHARGE"] },
+  // AFDC's name for Tesla's Level 2 wall connectors at hotels and car parks
+  { name: "Tesla Destination", qid: "Q478214",     icon: "tesla",             nets: ["Tesla Destination"] },
   { name: "FLO",               qid: "Q55596927",   icon: "flo",               nets: ["FLO"] },
   { name: "7-Eleven",          qid: "Q259340",     icon: "7-eleven",          nets: ["7CHARGE"] },
   { name: "Electric Era",      qid: null,          icon: "electric-era",      nets: ["ELECTRIC_ERA"] },

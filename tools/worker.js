@@ -18,6 +18,10 @@
 const ROUTES = {
   "/osm": { ttl: 3600, fn: osm },
   "/afdc": { ttl: 21600, fn: afdc },
+  // Level 2 only, and only asked for when the board's toggle is on. It is a
+  // 220 MB upstream response; a Worker may well not have the memory for it,
+  // which is why the published board reads the copy the refresh job saves.
+  "/afdc-l2": { ttl: 86400, fn: afdcL2 },
   "/tesla": { ttl: 1800, fn: tesla },
   "/ea": { ttl: 86400, fn: (env) => atp(env, "electrify_america_us") },
   "/ionna": { ttl: 86400, fn: (env) => atp(env, "ionna_us") },
@@ -222,12 +226,18 @@ function unitKinds(rows) {
        multi-connector unit with no `pw` can only be the old shape, where which
        connector the number belongs to is not known. */
     const same = names.length === 1;
-    // No `charging_level`: it repeats what the connector names already say, and
-    // at 19,500 entries the repetition is a quarter of a megabyte.
-    const key = `${names.map((k) => `${k}:${conn[k]}@${pw[k] ?? ""}`).join(",")}`;
+    /* `lv` is the charging level, written only where it is not DC fast. It
+       used to be left out altogether on the grounds that the connector says
+       it — which holds for CCS and CHAdeMO and not for Tesla's plug: a NACS
+       cable is a 250 kW Supercharger stall or an 11 kW wall connector in a
+       hotel car park, and only the level tells them apart. Without it every
+       Tesla destination charger read as fast charging. */
+    const lv = u.charging_level === "dc_fast" || !u.charging_level ? null
+      : u.charging_level === "1" ? 1 : 2;
+    const key = `${lv ?? ""}|${names.map((k) => `${k}:${conn[k]}@${pw[k] ?? ""}`).join(",")}`;
     const hit = by.get(key);
     if (hit) { hit.n++; continue; }
-    by.set(key, { n: 1, kw: kw || null, conn, ...(same ? {} : { pw }) });
+    by.set(key, { n: 1, kw: kw || null, conn, ...(same ? {} : { pw }), ...(lv ? { lv } : {}) });
   }
   return [...by.values()].sort((a, b) => b.n - a.n);
 }
@@ -302,6 +312,54 @@ async function afdc(env) {
     // access_code=public still lets through gated and key-only sites: AFDC marks
     // those with restricted_access, and access_detail_code carries the reason.
     sites: body.fuel_stations.map(slimAfdc),
+  };
+}
+
+/* Level 2 stations: the same AFDC register, asked for the other level.
+
+   69,000 records against 16,000, so this is a payload of its own that the
+   board loads only when asked, and each record is cut down further than a
+   fast-charging one — it is the difference between 15 MB and 30:
+
+     no `conn`      the units already say which connectors there are
+     no `conf`      it changes on most records every day, which would make the
+                    daily commit of this file a full rewrite rather than a diff
+     no `cards`     optional detail, and 70,000 copies of it
+     no `ports`     a Level 2 record has no DC ports by definition
+     `h: 1`         for the 57,000 records whose hours are exactly
+                    "24 hours daily"; anything else keeps its own words
+
+   A station with DC ports as well is left out: it is in the fast-charging
+   payload already, with its Level 2 units listed on it. Sorted by id so that
+   one day's file differs from the next only where AFDC changed. */
+function slimAfdcL2(s) {
+  const full = slimAfdc(s);
+  const { conn, conf, cards, ports, restricted, accessDetail, hours, nid, ...rest } = full;
+  return {
+    ...rest,
+    ...(restricted ? { restricted: true } : {}),
+    ...(accessDetail ? { accessDetail } : {}),
+    ...(hours === "24 hours daily" ? { h: 1 } : hours ? { hours } : {}),
+  };
+}
+
+async function afdcL2(env) {
+  const key = env.NLR_API_KEY || "DEMO_KEY";
+  const url =
+    "https://developer.nlr.gov/api/alt-fuel-stations/v1.json" +
+    `?api_key=${encodeURIComponent(key)}&fuel_type=ELEC&ev_charging_level=2` +
+    "&status=E&access=public&country=US&limit=all";
+  const res = await fetch(url, { headers: { "User-Agent": "charge-board/1.0" } });
+  if (!res.ok) throw new Error(`afdc level 2 ${res.status}`);
+  const body = await res.json();
+  return {
+    source: "AFDC (US DOE / NLR) · Level 2",
+    generated: new Date().toISOString().slice(0, 10),
+    records: body.fuel_stations.length,
+    sites: body.fuel_stations
+      .filter((s) => !(s.ev_dc_fast_num > 0))
+      .sort((a, b) => a.id - b.id)
+      .map(slimAfdcL2),
   };
 }
 
@@ -519,4 +577,4 @@ function err(status, message, origin) {
   });
 }
 
-export { slimOsm, splitOsm, slimEli, slimAfdc, slimTesla, slimAtp, unitKinds };
+export { slimOsm, splitOsm, slimEli, slimAfdc, slimAfdcL2, slimTesla, slimAtp, unitKinds };
