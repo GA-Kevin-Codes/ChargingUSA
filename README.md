@@ -43,8 +43,12 @@ GeoJSON export are all read off it, so they cannot disagree with one another.
 - Where two sources count a site differently both figures are shown, and where
   a value already on the map differs from the sources it is kept unless the
   mapper ticks it.
-- Free text becomes a tag only when it parses cleanly — hours, a single price —
-  and is otherwise shown in the source's own words.
+- Free text becomes a tag only when it parses cleanly, and is otherwise shown
+  in the source's own words. A price is written as `fee=yes` and never as
+  `charge`: tariffs change too often for the amount to be worth mapping.
+- The address is proposed by default. The street is written out in full and
+  stops at its type word — "555 W 44th St PUBLIC WORKS" is `West 44th Street`,
+  and the rest is shown as where on the property to look.
 - An open date that many sites of one network share is a batch-load date and is
   not written as `start_date`.
 

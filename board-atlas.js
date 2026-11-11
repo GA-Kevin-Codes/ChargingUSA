@@ -104,6 +104,7 @@
     lo: ["--map-lo", "#e9e3d3"], hi: ["--map-hi", "#94a8ba"], none: ["--map-null", "#f4f0e6"],
     line: ["--map-line", "#fbf9f4"], pick: ["--map-pick", "#18222d"], label: ["--map-label", "#18222d99"],
     on: ["--map-on", "#0f7d57"], off: ["--map-off", "#ee6a1e"],
+    done: ["--map-done", "#bfe3cf"], doneInk: ["--map-done-ink", "#0a6947"],
   };
   function palette(el) {
     const css = getComputedStyle(el);
@@ -264,7 +265,14 @@
           ctx.beginPath();
           ring.forEach(([lon, lat], i) => { const [x, y] = px(lon, lat); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
           ctx.closePath();
-          ctx.fillStyle = v == null ? pal.none : shade(norm(v));
+          /* A state with nothing missing is filled in its own colour whatever
+             the map is shading by. "Finished" is not a point on any of the
+             four scales — on the missing-sites scale it is the bottom, on the
+             percent scale the top — and it is the one thing about a state a
+             mapper most wants to see at a glance. */
+          const a = agg[code];
+          const done = !!a && a.sites > 0 && a.mapped === a.sites;
+          ctx.fillStyle = done ? pal.done : v == null ? pal.none : shade(norm(v));
           ctx.globalAlpha = dim ? 0.45 : 1;
           ctx.fill();
           ctx.strokeStyle = pal.line;
@@ -331,13 +339,23 @@
       if (flag(cfg(this, "labels")) && !focus) {
         ctx.font = "700 9.5px Overpass, system-ui, sans-serif";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillStyle = pal.label;
         for (const [code, st] of Object.entries(outline)) {
           const key = regionOf(code);
           if (!key || !proj[key]) continue;
           const b = ringBounds(st, code);
           const [x, y] = proj[key]((b.lon0 + b.lon1) / 2, (b.lat0 + b.lat1) / 2);
-          ctx.fillText(code, x, y);
+          const a = agg[code];
+          const done = !!a && a.sites > 0 && a.mapped === a.sites;
+          // the tick is drawn, not typed: no font is relied on to have one
+          ctx.fillStyle = done ? pal.doneInk : pal.label;
+          ctx.fillText(code, done ? x - 4 : x, y);
+          if (done) {
+            const w = ctx.measureText(code).width / 2;
+            ctx.strokeStyle = pal.doneInk; ctx.lineWidth = 1.6; ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(x + w - 2, y); ctx.lineTo(x + w + 0.5, y + 2.5); ctx.lineTo(x + w + 5, y - 3);
+            ctx.stroke();
+          }
         }
       }
 
@@ -371,11 +389,13 @@
       if (!found) { this._tip.style.opacity = "0"; return; }
       const st = this._d.states[found] || {};
       const a = (this._agg2 || {})[found] || { sites: 0, ports: 0, mapped: 0 };
-      const pct = a.sites ? Math.round((a.mapped / a.sites) * 100) : 0;
+      const pct = a.sites ? Math.floor((a.mapped / a.sites) * 100) : 0;
       this._tip.innerHTML = "<b>" + h(st.name || found) + "</b> · " +
         a.sites.toLocaleString() + " sites, " + a.ports.toLocaleString() + " ports<br>" +
-        '<span class="tip-sub">' + pct + "% on the map · </span>" +
-        '<span class="tip-off">' + (a.sites - a.mapped).toLocaleString() + " missing</span>";
+        (a.sites && a.mapped === a.sites
+          ? '<span class="tip-done">All of them are on the map</span>'
+          : '<span class="tip-sub">' + pct + "% on the map · </span>" +
+            '<span class="tip-off">' + (a.sites - a.mapped).toLocaleString() + " missing</span>");
       this._place(mx, my);
     }
 

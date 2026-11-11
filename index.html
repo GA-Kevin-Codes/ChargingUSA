@@ -112,6 +112,9 @@
   --map-label:  #18222d99;
   --map-on:     #0f7d57;
   --map-off:    #ee6a1e;
+  /* a state with nothing missing: its own fill, on any metric */
+  --map-done:     #c4e6d3;
+  --map-done-ink: #0a6947;
 
   /* drawn over aerial imagery in the editor, so the same in either theme */
   --pin:        #ff7a1a;
@@ -153,6 +156,7 @@
     --sign-plain:#1e242c; --sign-plain-ink:#eef2f5;
     --map-lo:#1f262e; --map-hi:#566a80; --map-null:#151a20; --map-line:#0f1317;
     --map-pick:#eef2f5; --map-label:#eef2f599; --map-on:#3ecb92; --map-off:#ff8a3d;
+    --map-done:#1d4a39; --map-done-ink:#7fe3b6;
     --shadow:none; --shadow-up:0 18px 40px -20px #000000cc;
   }
 }
@@ -168,6 +172,7 @@
   --sign-plain:#1e242c; --sign-plain-ink:#eef2f5;
   --map-lo:#1f262e; --map-hi:#566a80; --map-null:#151a20; --map-line:#0f1317;
   --map-pick:#eef2f5; --map-label:#eef2f599; --map-on:#3ecb92; --map-off:#ff8a3d;
+    --map-done:#1d4a39; --map-done-ink:#7fe3b6;
   --shadow:none; --shadow-up:0 18px 40px -20px #000000cc;
 }
 
@@ -433,6 +438,7 @@ us-map canvas { border-radius: 8px; }
 .map-tip b { font-weight: 700; }
 .map-tip .tip-sub { opacity: .78; }
 .map-tip .tip-off { color: color-mix(in srgb, var(--miss-fill) 70%, var(--surface)); font-weight: 600; }
+.map-tip .tip-done { color: color-mix(in srgb, var(--ok-fill) 55%, var(--surface)); font-weight: 700; }
 .legend {
   display: flex; align-items: center; gap: 10px 22px; flex-wrap: wrap;
   padding: 12px 22px 16px; font-size: var(--t-small); color: var(--muted);
@@ -449,6 +455,7 @@ us-map canvas { border-radius: 8px; }
 .key-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 .key-dot--on { background: var(--map-on); }
 .key-dot--off { background: var(--map-off); }
+.key-box { width: 15px; height: 11px; border-radius: 3px; display: inline-block; background: var(--map-done); border: 1px solid var(--map-done-ink); }
 .legend-hint { margin-left: auto; }
 
 .browse { position: relative; min-height: 420px; }
@@ -501,6 +508,14 @@ us-map canvas { border-radius: 8px; }
 .row-track { height: 5px; border-radius: 3px; background: var(--hairline); overflow: hidden; }
 .row-fill { display: block; height: 100%; border-radius: 3px; background: var(--ok-fill); }
 .row.is-thin .row-fill { background: var(--faint); }
+/* Nothing left to map here: said in words, ticked, and tinted — three signals,
+   so it reads at a glance and still reads without colour. */
+.row.is-full { background: var(--ok-wash); }
+.row.is-full:hover { background: color-mix(in srgb, var(--ok-fill) 22%, transparent); }
+.row.is-full.is-on { background: var(--accent-wash); }
+.row-done { display: inline-flex; align-items: center; gap: 5px; color: var(--ok); font-family: var(--font-ui); font-size: 12.5px; font-weight: 800; }
+.row-done svg { margin-top: -2px; }
+.row.is-full .code { border-color: var(--ok-fill); color: var(--ok); }
 .row-sub { font-family: var(--font-mono); font-size: 11px; color: var(--muted); min-width: 74px; text-align: right; }
 .code {
   flex: none; display: inline-grid; place-items: center; min-width: 28px; margin-right: 9px;
@@ -931,6 +946,60 @@ body.is-improving { overflow: hidden; }
 .imp-offers { display: flex; flex-direction: column; gap: 7px; }
 .imp-offers:empty { display: none; }
 
+/* One point, or an outline with its chargers: the first choice on either card. */
+.imp-shape { display: flex; flex-direction: column; gap: 6px; }
+
+/* The outline card is three steps, and the stepper is how you see where you
+   are and get back. A finished step is ticked; the current one is filled. */
+.imp-stepper { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.imp-stepper button {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 100%; text-align: left; cursor: pointer;
+  font: inherit; color: var(--ink-2); background: var(--raised);
+  border: 1px solid var(--rule); border-radius: 10px; padding: 8px 9px 6px;
+}
+.imp-stepper button:hover { border-color: var(--accent); }
+.imp-stepper button.is-on { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.imp-stepper-n {
+  flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  font: 700 12px/1 var(--font-mono); padding-top: 1px;
+  background: var(--sunken); color: var(--ink-2);
+}
+.imp-stepper button.is-on .imp-stepper-n { background: var(--surface); color: var(--ink); }
+.imp-stepper button.is-done .imp-stepper-n { background: var(--ok-fill); color: #fff; padding-top: 0; }
+.imp-stepper-t { min-width: 0; font-size: var(--t-small); font-weight: 700; line-height: 1.2; }
+.imp-stepper-t small { display: block; font-size: 10.5px; font-weight: 500; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.imp-stepbody {
+  display: flex; flex-direction: column; gap: 9px;
+  border: 1px solid var(--hairline); border-radius: 13px; background: var(--raised); padding: 15px 16px 16px;
+}
+.imp-stepbody h4 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.01em; line-height: 1.25; }
+.imp-stepbody > p { margin: 0; font-size: var(--t-small); color: var(--ink-2); }
+.imp-stepbody .imp-cfg { margin: 4px 0 0; padding-top: 10px; border-top: 1px solid var(--hairline); }
+/* where the step stands, in a sentence: the thing to read between clicks */
+.imp-status {
+  font-weight: 600; color: var(--ink) !important; padding: 8px 11px 6px; border-radius: 9px;
+  background: var(--sunken); border-left: 3px solid var(--rule);
+}
+.imp-status.is-ok { background: var(--ok-wash); border-left-color: var(--ok-fill); }
+.imp-summary { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; font-size: var(--t-small); color: var(--ink-2); }
+.imp-summary li { padding: 8px 11px 6px; border-radius: 9px; background: var(--sunken); border-left: 3px solid var(--rule); }
+.imp-summary li.is-ok { border-left-color: var(--ok-fill); }
+.imp-summary li.is-miss { border-left-color: var(--miss-fill); background: var(--miss-wash); }
+.imp-summary li.is-warn { border-left-color: var(--warn-fill); background: var(--warn-wash); }
+.imp-summary b { color: var(--ink); }
+.imp-summary .imp-link { display: inline; margin-left: 4px; }
+.imp-opt { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); margin-left: 4px; }
+.imp-actions--steps { grid-template-columns: auto 1fr auto; }
+.imp-ghost:disabled { opacity: .45; cursor: default; color: var(--ink-2); border-color: var(--rule); }
+/* what a click on the image does right now */
+.imp-hint {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3;
+  max-width: calc(100% - 220px); text-align: center; pointer-events: none;
+  font-size: var(--t-small); font-weight: 700; color: #fff; background: #10151bd9;
+  border: 1px solid #ffffff38; border-radius: 999px; padding: 8px 15px 6px;
+  box-shadow: var(--shadow-up);
+}
+
 /* The kinds of port a site has, as the rows to place from. */
 .imp-kinds { display: flex; flex-direction: column; gap: 5px; margin: 2px 0 4px; }
 .imp-kind {
@@ -1109,6 +1178,7 @@ kbd { font-size: 10.5px; background: var(--raised); border: 1px solid var(--rule
   /* the layer picker has the top of a narrow map to itself; the coordinate
      moves down to sit above the scale bar */
   .imp-readout { top: auto; right: auto; left: 12px; bottom: 38px; }
+  .imp-hint { bottom: auto; top: 86px; max-width: calc(100% - 24px); }
 }
 </style>
 </head>
@@ -1206,6 +1276,7 @@ kbd { font-size: 10.5px; background: var(--raised); border: 1px solid var(--rule
           <span id="range-unit"></span></span>
         <span class="key"><i class="key-dot key-dot--on"></i>on the map <b class="num" id="legend-mapped">0</b></span>
         <span class="key"><i class="key-dot key-dot--off"></i>missing <b class="num" id="legend-missing">0</b></span>
+        <span class="key" id="legend-done" hidden><i class="key-box"></i>states with nothing missing <b class="num">0</b></span>
         <span class="legend-hint" id="map-hint">Click a state to zoom into its sites</span>
       </div>
     </section>
@@ -1303,8 +1374,8 @@ kbd { font-size: 10.5px; background: var(--raised); border: 1px solid var(--rule
 </footer>
 
 <script src="site-keys.js?v=2"></script>
-<script src="board-atlas.js?v=roadatlas1"></script>
-<script src="app.js?v=inventory1"></script>
-<script src="edit.js?v=inventory1"></script>
+<script src="board-atlas.js?v=steps1"></script>
+<script src="app.js?v=steps1"></script>
+<script src="edit.js?v=steps1"></script>
 </body>
 </html>

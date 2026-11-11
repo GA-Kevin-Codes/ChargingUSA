@@ -158,18 +158,16 @@ if (K.parseHours) table("parseHours", K.parseHours, [
 if (K.parsePrice) table("parsePrice", K.parsePrice, [
   ["Free", { fee: "no" }],
   ["free", { fee: "no" }],
-  ["$0.30 per kWh", { fee: "yes", charge: "0.30 USD/kWh" }],
-  ["$0.45 per kWh", { fee: "yes", charge: "0.45 USD/kWh" }],
-  ["$0.3 per kWh", { fee: "yes", charge: "0.30 USD/kWh" }],
-  ["$0.25 per minute", { fee: "yes", charge: "0.25 USD/minute" }],
+  // a price is `fee=yes` and nothing more: `charge` is not written (see parsePrice)
+  ["$0.30 per kWh", { fee: "yes" }],
+  ["$0.25 per minute", { fee: "yes" }],
+  ["$0.40/kwh", { fee: "yes" }],
   ["Dynamic EV pricing rates", { fee: "yes" }],
   ["Please download 7Charge app for current pricing.", { fee: "yes" }],
   ["$0.48 per kWh; $1.00 per session", { fee: "yes" }],
   ["Free for first hour; $2.00 per hour after", null],     // two statements, not one price
   ["Free; pay lot", { fee: "no", "parking:fee": "yes" }],
   ["Level 2 Free; DC Fast Charger $10 per hour", null],
-  ["$0.40/kwh", { fee: "yes", charge: "0.40 USD/kWh" }],
-  ["$.30 per kWh", { fee: "yes", charge: "0.30 USD/kWh" }],
   ["Donations accepted", null],
   ["", null], [null, null],
 ]);
@@ -184,11 +182,50 @@ if (K.expandStreet) table("expandStreet", K.expandStreet, [
   ["850 N Broadway", { housenumber: "850", street: "North Broadway" }],
   ["4 Fisher St", { housenumber: "4", street: "Fisher Street" }],
   ["1041 Grass Valley Road", { housenumber: "1041", street: "Grass Valley Road" }],
-  ["18111 Nordhoff St", { housenumber: "18111", street: "Nordhoff Street" }],
   ["100 St Charles Ave", { housenumber: "100", street: "St Charles Avenue" }],     // Saint, left alone
+  ["12345 US Hwy 19 N", { housenumber: "12345", street: "US Highway 19 North" }],
+  ["2402 Highway 31 S", { housenumber: "2402", street: "Highway 31 South" }],
+  ["1400 Route 22", { housenumber: "1400", street: "Route 22" }],
+  ["63 Rd 1", { housenumber: "63", street: "Road 1" }],
+  ["700 Ave K", { housenumber: "700", street: "Avenue K" }],
+  ["955 N 400 E", { housenumber: "955", street: "North 400 East" }],              // a Utah grid address
+  ["1200 N St NW", { housenumber: "1200", street: "N Street Northwest" }],        // the street called N
+  ["5650 S I-35 E", { housenumber: "5650", street: "South I-35 E" }],             // I-35E keeps its letter
+  ["33180 OR-228", { housenumber: "33180", street: "OR-228" }],
+  ["123 MAIN ST", { housenumber: "123", street: "Main Street" }],
+  // the street stops at its type word; what follows is where on the property
+  ["555 W 44th St PUBLIC WORKS", { housenumber: "555", street: "West 44th Street", extra: "PUBLIC WORKS" }],
+  ["1 Town Square Murrieta City Hall", { housenumber: "1", street: "Town Square", extra: "Murrieta City Hall" }],
+  ["400 S Flower St P7 TWIN TOWERS", { housenumber: "400", street: "South Flower Street", extra: "P7 TWIN TOWERS" }],
+  ["12 Main St Ste 100", { housenumber: "12", street: "Main Street", extra: "Ste 100" }],
+  ["12 Main St, Suite 100", { housenumber: "12", street: "Main Street", extra: "Suite 100" }],
+  ["90 Park Ave South Garage Level 2", { housenumber: "90", street: "Park Avenue", extra: "South Garage Level 2" }],
+  ["90 Park Ave South", { housenumber: "90", street: "Park Avenue South" }],
+  ["90 Park Ave S Garage Level 2", { housenumber: "90", street: "Park Avenue South", extra: "Garage Level 2" }],
+  ["2229 E EXPY 83", { housenumber: "2229", street: "East Expressway 83" }],
+  ["204 Wade Rd Extension", { housenumber: "204", street: "Wade Road Extension" }],
+  ["1943 Montague Ave Ext", { housenumber: "1943", street: "Montague Avenue Extension" }],
+  ["235 State Hwy 7 Frontage Rd", { housenumber: "235", street: "State Highway 7 Frontage Road" }],
+  ["12881 Farm to Market Road 14 A", { housenumber: "12881", street: "Farm to Market Road 14", extra: "A" }],
+  ["500 Oracle Pkwy 500 Oracle Pkwy", { housenumber: "500", street: "Oracle Parkway", extra: "500 Oracle Pkwy" }],
+  ["10 Mill Rd Shopping Plaza", { housenumber: "10", street: "Mill Road", extra: "Shopping Plaza" }],
+  ["10 Main St Court House", { housenumber: "10", street: "Main Street", extra: "Court House" }],
+  // the same words as names, which must not be cut
+  ["12 Fox Run Dr", { housenumber: "12", street: "Fox Run Drive" }],
+  ["8 E St Charles Rd", { housenumber: "8", street: "East St Charles Road" }],
+  ["3 Court House Dr", { housenumber: "3", street: "Court House Drive" }],
+  ["27 Drive Thru Tree Rd", { housenumber: "27", street: "Drive Thru Tree Road" }],
+  ["400 Avenue of the Cities", { housenumber: "400", street: "Avenue of the Cities" }],
+  ["5 State Road 33 N", { housenumber: "5", street: "State Road 33 North" }],
+  ["9 County Road B W", { housenumber: "9", street: "County Road B West" }],
+  ["17503 N Loop 1604 W", { housenumber: "17503", street: "North Loop 1604 West" }],
+  ["615 615 second Ave east", { housenumber: "615", street: "Second Avenue East" }],
+  ["1 Jaguar Land Rover Wy DC CHARGER North Parking", { housenumber: "1", street: "Jaguar Land Rover Way", extra: "DC CHARGER North Parking" }],
+  ["950 N BALDWIN Ave", { housenumber: "950", street: "North Baldwin Avenue" }],
+  ["1 IKEA Way", { housenumber: "1", street: "IKEA Way" }],                        // spelled so on the sign
   ["I-95 Exit 12", null],                      // not an address
   ["Hwy 55 & Main St", null],                  // an intersection
-  ["12345 US Hwy 19 N", { housenumber: "12345", street: "US Highway 19 North" }],
+  ["100 Main St at 5th Ave", null],
   ["", null], [null, null],
 ]);
 
@@ -349,7 +386,19 @@ for (const s of M.sites) {
   if (tags["ref:afdc"] && !/^\d+(;\d+)*$/.test(tags["ref:afdc"])) fail("proposal: ref:afdc is not a list of ids", `${id(s)} ${tags["ref:afdc"]}`);
   if (tags.opening_hours && !/^(24\/7|((Mo|Tu|We|Th|Fr|Sa|Su)(-(Mo|Tu|We|Th|Fr|Sa|Su))?(,(Mo|Tu|We|Th|Fr|Sa|Su))* \d\d:\d\d-\d\d:\d\d(,\d\d:\d\d-\d\d:\d\d)*)(; (Mo|Tu|We|Th|Fr|Sa|Su)(-(Mo|Tu|We|Th|Fr|Sa|Su))?(,(Mo|Tu|We|Th|Fr|Sa|Su))* \d\d:\d\d-\d\d:\d\d(,\d\d:\d\d-\d\d:\d\d)*)*)$/.test(tags.opening_hours))
     fail("proposal: opening_hours is not valid syntax", `${id(s)} ${tags.opening_hours}`);
-  if (tags.charge && !/^\d+\.\d\d USD\/(kWh|minute|hour)$/.test(tags.charge)) fail("proposal: charge is not '<n> USD/<unit>'", `${id(s)} ${tags.charge}`);
+  if (tags.charge != null) fail("proposal: a `charge` tag, which is not to be written", `${id(s)} ${tags.charge}`);
+  /* The address: a street that still carries an abbreviation at its end, or a
+     word in capitals after its type, is the building's name riding along. */
+  if (tags["addr:street"] != null) {
+    if (!tags["addr:housenumber"]) fail("proposal: a street with no house number", id(s));
+    if (/\b(St|Rd|Ave|Blvd|Dr|Ln|Ct|Pkwy|Hwy)$/.test(tags["addr:street"])) fail("proposal: a street left abbreviated", `${id(s)} ${tags["addr:street"]}`);
+    if (tags["addr:street"].split(" ").includes(tags["addr:housenumber"])) fail("proposal: the house number repeated inside addr:street", `${id(s)} ${tags["addr:street"]}`);
+    // a word in capitals is a label — "PUBLIC WORKS" — unless it is a highway or a compass point
+    if (tags["addr:street"].split(" ").some((w) => /^[A-Z]{5,}$/.test(w)))
+      fail("proposal: a word in capitals left in addr:street", `${id(s)} ${tags["addr:street"]}`);
+  }
+  if (tags["addr:postcode"] && !/^\d{5}(-\d{4})?$/.test(tags["addr:postcode"])) fail("proposal: a postcode that is not a ZIP", `${id(s)} ${tags["addr:postcode"]}`);
+  if (tags["addr:state"] && !/^[A-Z]{2}$/.test(tags["addr:state"])) fail("proposal: a state that is not a code", `${id(s)} ${tags["addr:state"]}`);
   if (tags.fee && !/^(yes|no)$/.test(tags.fee)) fail("proposal: fee is not yes or no", `${id(s)} ${tags.fee}`);
   if (tags.website && !/^https?:\/\/\S+$/.test(tags.website)) fail("proposal: website is not a URL", `${id(s)} ${tags.website}`);
 

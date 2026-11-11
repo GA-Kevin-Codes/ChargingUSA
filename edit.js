@@ -1532,22 +1532,23 @@ function joinSpans(ranges) {
   return out.map(([a, b]) => `${fmt(a)}-${fmt(b)}`).join(",");
 }
 
-/* A price. `fee` is the claim most sources can support; `charge` needs a
-   single rate and nothing else — "$0.48 per kWh + $1 connection" is a price
-   and not a number, and half of it in a tag would be a lower price than
-   anybody pays. Anything mixing "free" with a dollar sign is two statements
-   about two things (the charging and the parking, or Level 2 and DC) and is
-   left for the mapper to read. */
+/* Whether charging costs money — and only that.
+
+   The amount is deliberately not written. `charge` exists as a key, but the
+   OSM community's settled practice for charging stations is to leave it off:
+   tariffs change every few months and by time of day, and a price on the map
+   is wrong for longer than it is right. `fee=yes` does not go stale that way,
+   so it is the whole of what a price supports here; the figure itself is
+   still shown on the card, as the source wrote it.
+
+   Anything mixing "free" with a dollar sign is two statements about two
+   things (the charging and the parking, or Level 2 and DC) and is left for
+   the mapper to read. */
 function parsePrice(text) {
   const t = String(text || "").trim();
   if (!t) return null;
   if (/^free$/i.test(t)) return { fee: "no" };
   if (/^free; (pay lot|parking fee)$/i.test(t)) return { fee: "no", "parking:fee": "yes" };
-  const one = /^\$\s*(\d*\.?\d+)\s*(?:per|\/)\s*(kwh|min(?:ute)?|hour)\.?$/i.exec(t);
-  if (one) {
-    const unit = { kwh: "kWh", min: "minute", minute: "minute", hour: "hour" }[one[2].toLowerCase()];
-    return { fee: "yes", charge: `${Number(one[1]).toFixed(2)} USD/${unit}` };
-  }
   if (/free/i.test(t)) return null;
   if (/\$|pric/i.test(t)) return { fee: "yes" };
   return null;
@@ -1566,38 +1567,123 @@ function startDate(open, bulk = 0) {
 }
 
 /* A street address as OSM spells it: number apart from the street, and the
-   street written out. US sources abbreviate and OSM does not, so the common
-   suffixes and compass points are expanded — only those, only at the ends
-   where they are unambiguous, and only when the whole thing is plainly "number,
-   then street". An intersection, a highway exit or a suite is returned as
-   null rather than cut into something address-shaped. */
+   street written out.
+
+   Three things go wrong with a source's address line, and each is handled
+   where it can be told apart from a street name and left alone where it
+   cannot:
+
+   Abbreviation. US sources abbreviate and OSM does not, so the street type
+   and the compass points at either end are expanded — "W 44th St" is "West
+   44th Street".
+
+   Trailing location. A line often carries on past the street: "555 W 44th St
+   PUBLIC WORKS", "1 Town Square Murrieta City Hall", "12 Main St Ste 100".
+   The street ends at its type word (plus a compass point, plus a route number
+   or letter — "Highway 83", "Avenue K"), so anything after that is where on
+   the property, not which street, and is returned separately as `extra`. It
+   used to be kept, which wrote the building's name into `addr:street`.
+
+   Not an address. An intersection, a highway exit or a mile marker is
+   returned as null rather than cut into something address-shaped. */
 const STREET_WORD = {
   rd: "Road", st: "Street", ave: "Avenue", av: "Avenue", blvd: "Boulevard", dr: "Drive", ln: "Lane",
   ct: "Court", pl: "Place", pkwy: "Parkway", pky: "Parkway", hwy: "Highway", cir: "Circle", trl: "Trail",
   ter: "Terrace", sq: "Square", expy: "Expressway", fwy: "Freeway", tpke: "Turnpike", rte: "Route",
+  wy: "Way",
 };
+// already written out: these end a street name just as their abbreviations do
+const STREET_TYPE = new Set([...Object.keys(STREET_WORD), ...Object.values(STREET_WORD).map((w) => w.toLowerCase()),
+  "way", "plaza", "loop", "pike", "row", "run", "path", "walk", "crossing", "bypass", "alley", "mall"]);
 const COMPASS = { n: "North", s: "South", e: "East", w: "West", ne: "Northeast", nw: "Northwest", se: "Southeast", sw: "Southwest" };
+const isCompass = (w) => !!COMPASS[String(w).toLowerCase()] || /^(north|south|east|west)(east|west)?$/i.test(w);
+// "83", "19N", "K", "M-50": what follows "Highway", "Route" or "Avenue" as part of the name
+const ROAD_ID = /^(\d+[A-Za-z]?|[A-Za-z]|[A-Za-z]{1,2}-\d+)$/;
+// "US-26", "I-35", "OR-228", "SR 906": a numbered highway, whose trailing letter is its own
+const HIGHWAY = /^(I|US|SR|CR|FM|[A-Z]{2})-?\d+[A-Za-z]?$/;
+
 function expandStreet(text) {
-  const t = String(text || "").trim().replace(/\s+/g, " ");
+  let t = String(text || "").trim().replace(/\s+/g, " ");
+  const extra = [];
+  // a unit after the street: cut, and kept as what it is
+  const unit = /[,\s]+((?:suite|ste|unit|bldg|building|apt|#)\s*\.?\s*\S+.*)$/i.exec(t);
+  if (unit) { extra.unshift(unit[1].trim()); t = t.slice(0, unit.index).trim(); }
   const m = /^(\d+[A-Za-z]?)\s+(.+)$/.exec(t);
-  if (!m || /[&@/#,]|\b(exit|at|and|suite|ste|unit|mile|mm)\b/i.test(m[2])) return null;
-  let words = m[2].split(" ").map((w) => w.replace(/\.$/, ""));
-  if (words.length < 2 && !/^[A-Za-z]{4,}$/.test(words[0] || "")) return null;
-  // a source that shouts gets title case; anything already mixed is left alone
-  if (m[2] === m[2].toUpperCase()) words = words.map((w) => /^\d/.test(w) ? w : w[0] + w.slice(1).toLowerCase());
+  if (!m || /[&@/#,;()]|\b(exit|at|and|mile|mm|between|near|corner)\b/i.test(m[2])) return null;
+  let words = m[2].split(" ").map((w) => w.replace(/\.$/, "")).filter(Boolean);
+  if (!words.length) return null;
+
+  // the number given twice: "615 615 Second Ave", "500 Oracle Pkwy 500 Oracle Pkwy"
+  while (words.length > 1 && words[0] === m[1]) words.shift();
+  const again = words.indexOf(m[1], 1);
+  if (again > 0) { extra.unshift(words.slice(again).join(" ")); words = words.slice(0, again); }
+
+  /* Where the street name stops: at its type word, plus the road number or
+     letter some types take ("Highway 83", "Avenue K") and a compass point.
+     Whatever follows that is location and is cut.
+
+     Which word is the type is the hard part, because the same words are also
+     names — "Fox Run Drive", "Court House Road", "St Charles Avenue". So the
+     first type word wins unless the line ends cleanly on a later one that is
+     either directly after it (Run, then Drive) or follows a "St" that is a
+     saint. A type word in first place is a name ("Court House Drive") unless
+     a road number follows it ("Road 1"). */
+  const low = words.map((w) => w.toLowerCase());
+  const takesId = (i) => /^(hwy|highway|rte|route|rd|road|ave|av|avenue|loop|pike|expy|expressway|fwy|freeway)$/.test(low[i]);
+  const after = (i) => {
+    let stop = i + 1;
+    if (stop < words.length && takesId(i) && ROAD_ID.test(words[stop]) && !isCompass(words[stop])) stop++;
+    // "Wade Rd Extension" is a street of its own, named for the one it continues
+    if (stop < words.length && /^ext(ension)?$/.test(low[stop])) stop++;
+    /* A compass point after the type belongs to the street when it is the
+       abbreviation ("34th Ave N") or the last word. Written out and followed
+       by more — "Blvd South Customer Parking" — it is the start of the label. */
+    if (stop < words.length && isCompass(words[stop]) && (COMPASS[low[stop]] || stop === words.length - 1)) stop++;
+    return stop;
+  };
+  const types = low.map((w, i) => i).filter((i) => STREET_TYPE.has(low[i]) &&
+    (i > 0 || (takesId(0) && words[1] && ROAD_ID.test(words[1]) && !isCompass(words[1]))));
+  let end = -1;
+  if (types.length) {
+    const first = types[0];
+    const clean = (i) => after(i) === words.length;
+    // "Hwy 7 Frontage Rd": the road beside the highway, not a place on it
+    const beside = (i) => low.slice(after(first), i).every((w) => /^(frontage|access|service)$/.test(w)) && after(first) < i;
+    const later = types.find((i) => i > first && clean(i) && (i === first + 1 || low[first] === "st" || beside(i)));
+    end = clean(first) || later == null ? first : later;
+    const stop = after(end);
+    if (stop < words.length) { extra.unshift(words.slice(stop).join(" ")); words = words.slice(0, stop); }
+  } else if (words.length < 2 && !/^[A-Za-z]{4,}$/.test(words[0]) && !HIGHWAY.test(words[0])) return null;
+
+  /* Case. A line that shouts throughout gets title case. So does one long
+     shouted word in an otherwise mixed line ("N BALDWIN Ave"), and a word left
+     entirely in lower case ("second Ave east"). Short capitals are left alone:
+     "LPGA Boulevard" and "IKEA Way" are spelled that way on the sign. */
+  const shouted = words.join(" ") === words.join(" ").toUpperCase() && /[A-Z]{3}/.test(words.join(" "));
+  const keep = (w) => /^\d/.test(w) || HIGHWAY.test(w) || COMPASS[w.toLowerCase()];
+  const title = (w) => w[0].toUpperCase() + w.slice(1).toLowerCase();
+  words = words.map((w) => keep(w) ? w
+    : shouted || /^[A-Z]{5,}$/.test(w) ? title(w)
+    : /^[a-z]{2,}$/.test(w) && !/^(of|the|to|de|del|la|las|los|el|and|du|van|von)$/.test(w) ? title(w) : w)
+    .map((w) => (/^ext$/i.test(w) ? "Extension" : w));
   const last = words.length - 1;
+  const numbered = words.some((w) => HIGHWAY.test(w));
   words = words.map((w, i) => {
     const k = w.toLowerCase();
-    // a compass point leads or trails; in the middle it is part of a name
-    if (COMPASS[k] && (i === 0 || i === last) && words.length > 1) return COMPASS[k];
-    // "St" directly after the number is a saint, not a street
-    if (k === "st" && i === 0) return w;
-    // "US Hwy 19": the one suffix that also sits in the middle
-    if (k === "hwy") return STREET_WORD.hwy;
-    const tail = i === last || (i === last - 1 && COMPASS[words[last].toLowerCase()]);
-    return STREET_WORD[k] && tail && i > 0 ? STREET_WORD[k] : w;
+    if (COMPASS[k] && words.length > 1) {
+      // "N St NW" is the street called N, not North Street — but "N Loop 1604"
+      // and "E St Charles Rd" are a direction in front of a name
+      if (i === 0 && end === 1 && /^(st|street|ave|av|avenue)$/i.test(words[1]) && after(1) - 1 <= 2 && !ROAD_ID.test(words[2] || "-")) return w;
+      if (i === 0) return COMPASS[k];
+      // "I-35 E" is the highway I-35E; its letter is not a direction to spell out
+      if (i === last && !numbered) return COMPASS[k];
+      return w;
+    }
+    // "St" before the end of the name is a saint, not a street
+    if (k === "st" && i !== end) return w;
+    return STREET_WORD[k] && (i === end || (i > 0 && (k === "hwy" || k === "rte"))) ? STREET_WORD[k] : w;
   });
-  return { housenumber: m[1], street: words.join(" ") };
+  return { housenumber: m[1], street: words.join(" "), ...(extra.length ? { extra: extra.join(", ") } : {}) };
 }
 
 const CARD_TAG = {
@@ -1758,6 +1844,28 @@ function proposeTags(s, why = {}) {
   // the operator's page for this one site — not its home page, which says nothing
   if (/^https?:\/\/\S+$/.test(s.web || "")) { t.website = s.web; say("website", own, "The operator's own page for this site"); }
 
+  /* The address, on by default. It is the site's rather than the charger's,
+     but it is what most people look a station up by, and it was being added by
+     hand at nearly every site — so it is proposed, labelled with the line it
+     came from, and removed like any other tag where it does not belong. */
+  const a = expandStreet(s.street);
+  const line = s.street && s.src !== "AFDC" ? own : "AFDC";
+  const from = `${line === "AFDC" ? "AFDC" : s.src}: “${s.street}”`;
+  if (a) {
+    t["addr:housenumber"] = a.housenumber; say("addr:housenumber", line, from);
+    t["addr:street"] = a.street;
+    say("addr:street", line, a.extra
+      ? `${from} — “${a.extra}” left out: it says where on the property, not which street`
+      : `${from}, written out in full — check it against the street sign`);
+  }
+  {
+    // city, state and ZIP stand on their own: they are true of the site whether
+    // or not its street line could be read
+    if (s.city) { t["addr:city"] = s.city; say("addr:city", line, `${line === "AFDC" ? "AFDC" : s.src}`); }
+    if (/^[A-Z]{2}$/.test(s.state || "")) { t["addr:state"] = s.state; say("addr:state", line, `${line === "AFDC" ? "AFDC" : s.src}`); }
+    if (/^\d{5}(-\d{4})?$/.test(String(s.zip || ""))) { t["addr:postcode"] = String(s.zip); say("addr:postcode", line, `${line === "AFDC" ? "AFDC" : s.src}`); }
+  }
+
   const opened = startDate(s.open, s.openBulk);
   if (opened) { t.start_date = opened; say("start_date", s.openSrc || own, `${s.openSrc || s.src} open date${opened.length === 4 ? " — a 1 January, so only the year is taken" : ""}`); }
   return t;
@@ -1765,23 +1873,11 @@ function proposeTags(s, why = {}) {
 
 /* More that the sources know, which is true of the site and not obviously the
    charging station's to carry. Each is one click to add and one to take back,
-   and nothing here is on by default: an address belongs to the building as
-   much as to the chargers, and a list of cards is the kind of detail that goes
-   stale. They are offered because typing them is the slow part. */
+   and nothing here is on by default: a list of cards is the kind of detail
+   that goes stale. They are offered because typing them is the slow part. */
 function offers(s) {
   const out = [];
   const own = sourceMark(s.src);
-  const a = expandStreet(s.street);
-  const zip = /^\d{5}(-\d{4})?$/.test(String(s.zip || "")) ? String(s.zip) : null;
-  const addr = {
-    ...(a ? { "addr:housenumber": a.housenumber, "addr:street": a.street } : {}),
-    ...(s.city ? { "addr:city": s.city } : {}),
-    ...(/^[A-Z]{2}$/.test(s.state || "") ? { "addr:state": s.state } : {}),
-    ...(zip ? { "addr:postcode": zip } : {}),
-  };
-  if (a || zip) out.push({ id: "addr", label: "Address", tags: addr, src: s.street && s.src !== "AFDC" ? own : "AFDC",
-    hint: `${s.street || ""}${s.city ? `, ${s.city}` : ""}${zip ? ` ${zip}` : ""} — check the street is spelled as signed` });
-
   const cards = Object.fromEntries(String(s.cards || "").split(/\s+/)
     .map((c) => CARD_TAG[c]).filter(Boolean).map((k) => [k, "yes"]));
   if (Object.keys(cards).length) out.push({ id: "pay", label: "Cards accepted", tags: cards, src: "AFDC",
@@ -2165,6 +2261,7 @@ function upgradeClick(ll) {
   // the configuration is copied, not referenced: changing it for the next
   // cabinet must not rewrite the one just placed
   else {
+    if (!cfgSockets(u.cfg)) return true;
     u.pts.push({ ...ll, cfg: JSON.parse(JSON.stringify(u.cfg)) });
     nextKind(u);
   }
@@ -2202,6 +2299,19 @@ const upgradeRing = (u) =>
 function drawUpgrade(ctx, map) {
   const u = CUR.up;
   if (!u) return;
+  /* The reported position, as a dashed ring. There is no pin on this card, and
+     without some mark the image gives no hint which of four car parks the
+     source meant. */
+  if (CUR.site && MODE() !== "upgrade") {
+    const [x, y] = map.toPx(CUR.site.lat, CUR.site.lon);
+    ctx.strokeStyle = cssv("--pin-warn"); ctx.lineWidth = 1.6; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, 6.284); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = "600 9.5px 'Overpass Mono', monospace"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    const w = ctx.measureText("reported").width + 6;
+    ctx.fillStyle = "rgba(14,13,13,.72)"; ctx.fillRect(x - w / 2, y - 26, w, 11);
+    ctx.fillStyle = cssv("--pin-warn"); ctx.fillText("reported", x, y - 16);
+  }
   const ring = upgradeRing(u);
   if (ring.length) {
     ctx.beginPath();
@@ -2258,9 +2368,15 @@ function drawUpgrade(ctx, map) {
    node, and turning it back into one is not an improvement. */
 function shapeSwitch(u) {
   if (MODE() === "upgrade") return "";
-  return `<div class="imp-tools imp-shape">
-    <button class="imp-chip${u.shape !== "area" ? " is-on" : ""}" data-shape="node">A single node</button>
-    <button class="imp-chip${u.shape === "area" ? " is-on" : ""}" data-shape="area">An area with charge points</button>
+  const area = u.shape === "area";
+  return `<div class="imp-shape">
+    <div class="imp-tools">
+      <button class="imp-chip${area ? "" : " is-on"}" data-shape="node" aria-pressed="${!area}">One point</button>
+      <button class="imp-chip${area ? " is-on" : ""}" data-shape="area" aria-pressed="${area}">Outline + each charger</button>
+    </div>
+    <p class="imp-note">${area
+      ? "Trace the site's edge, then click each charger. Worth it for a big site."
+      : "A single marker for the whole site. Quickest, and all a small site needs."}</p>
   </div>`;
 }
 
@@ -2305,7 +2421,7 @@ function evidenceCard(s) {
   }
   if (s.other === false) row("Open to", "Tesla vehicles only");
   if (s.hours) row("Hours", `“${esc(s.hours)}”${parseHours(s.hours) || s.hoursOsm ? "" : ` <span class="imp-unused">not a tag</span>`}`);
-  if (s.price) row("Price", `“${esc(s.price)}”${parsePrice(s.price)?.charge || /^free/i.test(s.price) ? "" : ` <span class="imp-unused">${parsePrice(s.price) ? "fee only" : "not a tag"}</span>`}`);
+  if (s.price) row("Price", `“${esc(s.price)}”${parsePrice(s.price) ? "" : ` <span class="imp-unused">not a tag</span>`}`);
   if (s.host) row("Host", esc(s.host));
   else if (s.fac) row("Facility", esc(FAC_WORDS(s.fac)));
   if (s.dir) row("Where", `“${esc(s.dir)}”`);
@@ -2378,6 +2494,28 @@ function upgradeCard(side) {
     .filter((k) => u.cfg.conn[k] && (powers[k] || []).length > 1)
     .map((k) => [k, powers[k]]);
 
+  const step = u.step || "outline";
+  const drawn = ring.length > 2;
+  /* A site with nothing on the map needs the outline: it is what carries
+     `amenity=charging_station`, and chargers saved without one would be
+     equipment belonging to no station. A site that is already a node can have
+     chargers added or moved on their own. */
+  const needOutline = !s.osmId;
+  const canSave = needOutline ? drawn : drawn || placed > 0 || nudged.length > 0;
+  const bays = u.pts.reduce((a, pt) => a + cfgBays(pt.cfg), 0);
+  const saveLabel = [drawn ? "outline" : null,
+    placed ? `${nf(placed)} charger${placed === 1 ? "" : "s"}` : null,
+    nudged.length ? `${nf(nudged.length)} moved` : null].filter(Boolean).join(" + ");
+  const stepNote = {
+    outline: drawn ? `${nf(ring.length)} corners` : "the site's edge",
+    chargers: placed ? `${nf(bays)}${inv.capacity ? ` of ${nf(inv.capacity)}` : ""} placed` : "one click each",
+    review: "and save",
+  };
+  const stepDone = { outline: drawn, chargers: placed > 0 && (!inv.capacity || bays >= inv.capacity), review: false };
+  /* What the outline will be tagged with when it replaces a node that could be
+     read ahead of time: the node's own tags, with the sources filling gaps. */
+  const preview = onMap ? stationTags(onMap.tags, inv, { overwrite: u.over || null }) : null;
+
   side.innerHTML = `
     <div class="imp-card imp-card--site">
       <h3>${esc(s.name || "Unnamed site")}</h3>
@@ -2391,120 +2529,123 @@ function upgradeCard(side) {
       </dl>
     </div>
 
-    ${evidenceCard(s)}
+    ${shapeSwitch(u)}
 
-    ${conflicts.length ? `
-      <div class="imp-warn">
-        <b>The map and the sources differ</b>
-        <p class="imp-note">What is tagged now is kept unless you tick it. Somebody may have counted
-           these on the ground — tick only what the imagery bears out.</p>
-        <div class="imp-tags">
-          ${conflicts.map((r) => `
-            <label class="tagrow diffrow is-change">
-              <input type="checkbox" data-over="${esc(r.key)}"${u.over.has(r.key) ? " checked" : ""}>
-              <span class="tag-k mono">${esc(r.key)}</span>
-              <span class="tag-v">map <b>${esc(r.had)}</b> · sources <b>${esc(r.want)}</b></span>
-              <span class="kind">use</span>
-            </label>`).join("")}
+    <ol class="imp-stepper" aria-label="Steps">
+      ${[["outline", "Outline"], ["chargers", "Chargers"], ["review", "Review"]].map(([key, label], i) => `
+        <li><button data-go="${key}" class="${step === key ? "is-on" : ""}${stepDone[key] ? " is-done" : ""}"
+                    ${step === key ? 'aria-current="step"' : ""}>
+          <span class="imp-stepper-n">${stepDone[key] ? ICON.check : i + 1}</span>
+          <span class="imp-stepper-t">${label}<small>${esc(stepNote[key])}</small></span>
+        </button></li>`).join("")}
+    </ol>
+
+    ${step === "outline" ? `
+      <div class="imp-stepbody">
+        <h4>Trace the edge of the charging area</h4>
+        <p>Click the corners of the ground the chargers and their parking bays stand on.
+           Three clicks make a rectangle; more follow the shape.</p>
+        <p class="imp-status${drawn ? " is-ok" : ""}">${
+          !ring.length ? "No corners yet — click the first one on the image."
+          : ring.length < 3 ? `${nf(ring.length)} corner${ring.length === 1 ? "" : "s"} — ${nf(3 - ring.length)} more to make a shape.`
+          : `${nf(ring.length)} corners${u.square ? ", squared up" : ", exactly as clicked"}. Add more, or go on.`}</p>
+        <div class="imp-poi-acts">
+          <button class="imp-chip" id="up-undo"${ring.length ? "" : " disabled"}>Undo last corner</button>
+          <button class="imp-chip" id="up-clear"${ring.length ? "" : " disabled"}>Start over</button>
+          <button class="imp-chip${u.square ? " is-on" : ""}" id="up-square" aria-pressed="${u.square}"
+                  title="${u.square ? "Right angles are forced. Turn off for an L, a wedge, or however the site runs."
+                                    : "Every corner stays where you put it."}">Square corners</button>
         </div>
+        ${needOutline ? "" : `<button class="imp-link" id="up-no-outline">Skip the outline — only add or move chargers</button>`}
       </div>` : ""}
 
-    <div class="imp-poi">
-      <b>What stands here${inv.src ? ` · ${esc(sourceMark(inv.src))}` : ""}</b>
-      ${inv.kinds.length ? `
-        <div class="imp-kinds">
-          ${inv.kinds.map((k, i) => {
-            const key = kindKey(k), got = doneKinds[key] || 0;
-            const twin = Object.values(k.conn).some((c) => c > 1);
-            return `<button class="imp-kind${u.cfg.kind === key ? " is-on" : ""}${
-                got === k.n ? " is-done" : got > k.n ? " is-over" : ""}" data-kind="${i}"
-                aria-pressed="${u.cfg.kind === key}" title="Place this kind">
-              <span class="imp-kind-n mono">${nf(k.n)} ×</span>
-              <span class="imp-kind-what">${esc(kindLabel(k))}${twin ? `<em>one car at a time</em>` : ""}${
-                k.vague ? `<em>cable count not stated</em>` : ""}</span>
-              <span class="imp-kind-got mono">${nf(got)} / ${nf(k.n)}</span>
-            </button>`;
-          }).join("")}
+    ${step === "chargers" ? `
+      <div class="imp-stepbody">
+        <h4>Click each charger on the image</h4>
+        ${inv.kinds.length ? `
+          <p>${inv.kinds.length > 1 ? `This site has ${nf(inv.kinds.length)} kinds. Start with the highlighted one; the next is picked for you when it is used up.`
+                : `Every charger here is the same. One click each.`}</p>
+          <div class="imp-kinds">
+            ${inv.kinds.map((k, i) => {
+              const key = kindKey(k), got = doneKinds[key] || 0;
+              const twin = Object.values(k.conn).some((c) => c > 1);
+              return `<button class="imp-kind${u.cfg.kind === key ? " is-on" : ""}${
+                  got === k.n ? " is-done" : got > k.n ? " is-over" : ""}" data-kind="${i}"
+                  aria-pressed="${u.cfg.kind === key}" title="Place this kind">
+                <span class="imp-kind-n mono">${nf(k.n)} ×</span>
+                <span class="imp-kind-what">${esc(kindLabel(k))}${twin ? `<em>one car at a time</em>` : ""}${
+                  k.vague ? `<em>cable count not stated</em>` : ""}</span>
+                <span class="imp-kind-got mono">${nf(got)} / ${nf(k.n)}</span>
+              </button>`;
+            }).join("")}
+          </div>`
+        : `<p>No source lists the individual chargers here, only totals. Set up one charger under
+             <b>Something different</b> and click where the imagery shows them.</p>`}
+        <p class="imp-status${balanced && placed ? " is-ok" : ""}">${
+          !placed ? `Nothing placed yet${already.length ? ` — ${nf(already.length)} already on the map are counted in` : ""}.`
+          : balanced ? `${nf(placed)} placed — every socket the sources list is accounted for.`
+          : `${nf(placed)} placed. Still to go: ${esc(Object.entries(left).map(([k, n]) =>
+               n > 0 ? `${nf(n)} ${socketLabel(k)}` : `${nf(-n)} ${socketLabel(k)} too many`).join(", "))}.`}</p>
+        <div class="imp-poi-acts">
+          <button class="imp-chip" id="up-undo"${placed ? "" : " disabled"}>Undo last charger</button>
+          <button class="imp-chip" id="up-clear"${placed ? "" : " disabled"}>Remove all</button>
         </div>
-        <p class="imp-note">Each row is ${nf(1)} port — one car charging. Pick a row, then click each
-           one on the imagery; the next row is selected when a row is used up.</p>`
-      : `<p class="imp-note">No source itemises the dispensers here, only totals. Build one cabinet
-           below and place what the imagery shows.</p>`}
 
-      <div class="imp-balance">
-        ${Object.entries(total).map(([key, n]) => {
-          const gone = done[key] || 0;
-          return `<div class="imp-balance-row${gone === n ? " is-done" : gone > n ? " is-over" : ""}">
-            <span>${esc(socketLabel(key))} <span class="mono">${esc(key)}</span></span>
-            <span class="mono">${nf(gone)} / ${nf(n)}${
-              powers[key]?.length > 1 ? ` · ${powers[key].join("/")} kW` : ""}</span>
-          </div>`;
-        }).join("")}
-      </div>
-      <p class="imp-note">${balanced ? `Every socket accounted for.`
-        : `Still to place: ${esc(Object.entries(left).map(([k, n]) =>
-             n > 0 ? `${nf(n)} ${socketLabel(k)}` : `${nf(-n)} ${socketLabel(k)} too many`).join(", "))}.`}${
-        already.length ? ` ${nf(already.length)} already mapped, counted in. Drag a ring onto its
-        actual bay.` : ""}</p>
-
-      <div class="imp-cfg">
-        <div class="ctl-label">This cabinet</div>
-        <div class="imp-cfg-row">
-          <span class="imp-cfg-what">${esc(cfgLabel(u.cfg))}</span>
-        </div>
-        <div class="imp-cfg-row">
-          <span title="A cabinet serving two bays is two of the source's ports on one box">Cars it charges at once</span>
-          <span class="imp-step">
-            <button class="imp-chip" data-bays="-1"${cfgBays(u.cfg) > 1 ? "" : " disabled"}>−</button>
-            <b class="mono">${nf(cfgBays(u.cfg))}</b>
-            <button class="imp-chip" data-bays="1"${cfgBays(u.cfg) < 8 && cfgSockets(u.cfg) ? "" : " disabled"}>+</button>
-          </span>
-        </div>
-        <details class="imp-fold" id="up-custom"${u.custom ? " open" : ""}>
-          <summary>Change the cables by hand</summary>
-          ${Object.keys(total).map((key) => `
-            <div class="imp-cfg-row">
-              <span>${esc(socketLabel(key))} <span class="mono">${esc(key)}</span></span>
-              <span class="imp-step">
-                <button class="imp-chip" data-conn="${esc(key)}" data-step="-1"${
-                  (u.cfg.conn[key] || 0) ? "" : " disabled"}>−</button>
-                <b class="mono">${nf(u.cfg.conn[key] || 0)}</b>
-                <button class="imp-chip" data-conn="${esc(key)}" data-step="1">+</button>
-              </span>
+        <div class="imp-cfg">
+          <div class="imp-cfg-row">
+            <span>Next click places <b class="imp-cfg-what">${esc(cfgLabel(u.cfg))}</b></span>
+          </div>
+          <div class="imp-cfg-row">
+            <span title="A cabinet that serves two parking bays is two of the source's ports in one box">Bays this one serves</span>
+            <span class="imp-step">
+              <button class="imp-chip" data-bays="-1"${cfgBays(u.cfg) > 1 ? "" : " disabled"}>−</button>
+              <b class="mono">${nf(cfgBays(u.cfg))}</b>
+              <button class="imp-chip" data-bays="1"${cfgBays(u.cfg) < 8 && cfgSockets(u.cfg) ? "" : " disabled"}>+</button>
+            </span>
+          </div>
+          <details class="imp-fold" id="up-custom"${u.custom ? " open" : ""}>
+            <summary>Something different</summary>
+            <p class="imp-note">For a charger the sources do not describe. Set its cables; each one
+               placed keeps what it was placed with.</p>
+            ${Object.keys(total).map((key) => `
+              <div class="imp-cfg-row">
+                <span>${esc(socketLabel(key))} <span class="mono">${esc(key)}</span></span>
+                <span class="imp-step">
+                  <button class="imp-chip" data-conn="${esc(key)}" data-step="-1"${
+                    (u.cfg.conn[key] || 0) ? "" : " disabled"}>−</button>
+                  <b class="mono">${nf(u.cfg.conn[key] || 0)}</b>
+                  <button class="imp-chip" data-conn="${esc(key)}" data-step="1">+</button>
+                </span>
+              </div>`).join("")}
+            ${kwRows.map(([key, kws]) => `<div class="imp-cfg-row">
+              <span class="ctl-label">${esc(socketLabel(key))} power</span>
+              <span class="imp-seg">${kws.map((kw) =>
+                `<button class="seg-btn${u.cfg.kw?.[key] === kw ? " is-on" : ""}"
+                         data-kw="${kw}" data-kwfor="${esc(key)}">${kw}</button>`).join("")}</span>
             </div>`).join("")}
-          ${kwRows.map(([key, kws]) => `<div class="imp-cfg-row">
-            <span class="ctl-label">${esc(socketLabel(key))} power</span>
-            <span class="imp-seg">${kws.map((kw) =>
-              `<button class="seg-btn${u.cfg.kw?.[key] === kw ? " is-on" : ""}"
-                       data-kw="${kw}" data-kwfor="${esc(key)}">${kw}</button>`).join("")}</span>
+          </details>
+        </div>
+
+        ${already.length ? `<p class="imp-note">The green rings are chargers already on the map. Drag one
+           onto its real bay to move it.</p>` : ""}
+        ${nudged.length ? `<div class="imp-moved">
+          ${nudged.map((o) => `<div class="imp-moved-row">
+            <a href="${ENV().web}/node/${esc(o.id)}" target="_blank" rel="noopener" class="mono">node ${esc(o.id)}</a>
+            <button class="imp-chip" data-home="${esc(o.id)}" title="Put it back where OpenStreetMap has it">
+              moved ${nf(Math.round(metres(o.home, o)))} m</button>
           </div>`).join("")}
-          <p class="imp-note">For a cabinet the sources do not describe. Each point keeps the
-             layout it was placed with.</p>
-        </details>
+        </div>` : ""}
       </div>
-
-      ${groups.size ? `<div class="imp-balance">${[...groups].map(([label, n]) =>
-        `<div class="imp-balance-row"><span>${nf(n)} placed: ${esc(label)}</span></div>`).join("")}</div>` : ""}
-
-      ${nudged.length ? `<div class="imp-moved">
-        ${nudged.map((o) => `<div class="imp-moved-row">
-          <a href="${ENV().web}/node/${esc(o.id)}" target="_blank" rel="noopener" class="mono">node ${esc(o.id)}</a>
-          <button class="imp-chip" data-home="${esc(o.id)}" title="Put it back where OpenStreetMap has it">
-            moved ${nf(Math.round(metres(o.home, o)))} m</button>
-        </div>`).join("")}
-      </div>` : ""}
-
-    </div>
 
     <div class="imp-poi">
       <div class="imp-poi-row">
-        <b>What these dispensers are</b>
+        <b>Make and model <span class="imp-opt">optional</span></b>
         <button class="imp-chip" id="up-gear-open" aria-expanded="${u.open ? "true" : "false"}">${
           u.open ? "Done" : gearSummary(u.gear) ? "Edit" : "Add"}</button>
       </div>
       ${!u.open ? `<p class="imp-note">${gearSummary(u.gear)
         ? esc(gearSummary(u.gear))
-        : `Nothing set — the dispensers go in with sockets and power only.`}</p>
+        : `Nothing set — the chargers go in with their sockets and power only.`}</p>
         ${hint && modelLabel(u.gear) !== modelLabel(hint) ? `<div class="imp-models">
           <button class="imp-chip" id="up-gear-hint" title="supercharge.info names one hardware generation for this site">
             ${esc(modelLabel(hint))} <span class="tag-src">SC.info</span></button>
@@ -2546,58 +2687,77 @@ function upgradeCard(side) {
         <p class="imp-note">Saving keeps the cabinet — make, model, ids, current, voltage — so the
            next site is one click. Brand stays out of it: the same box turns up on other people's
            forecourts. Current and voltage are the cabinet's, not the site's.</p>`}
-    </div>
+    </div>` : ""}
 
-    ${shapeSwitch(u)}
+    ${step === "review" ? `
+      <div class="imp-stepbody">
+        <h4>Check, then save</h4>
+        <ul class="imp-summary">
+          <li class="${drawn ? "is-ok" : needOutline ? "is-miss" : ""}">${drawn
+            ? `<b>The outline</b> becomes the charging station${s.osmId ? `, taking over from ${esc(s.osmId)}` : ""}.`
+            : needOutline ? `<b>No outline yet.</b> It is what marks this as a charging station, so it is needed before saving.
+                 <button class="imp-link" data-go="outline">Draw it</button>`
+            : `<b>No outline.</b> ${esc(s.osmId)} stays as the station.`}</li>
+          <li class="${placed ? "is-ok" : ""}">${placed
+            ? `<b>${nf(placed)} charger${placed === 1 ? "" : "s"}</b> added inside it: ${esc([...groups].map(([label, n]) => `${label} (${nf(n)})`).join(", "))}.`
+            : `<b>No chargers placed.</b> That is fine — the station alone is a complete edit.
+                 <button class="imp-link" data-go="chargers">Add them</button>`}</li>
+          ${placed && inv.capacity && bays !== inv.capacity ? `<li class="is-warn">The sources list <b>${nf(inv.capacity)}</b> ports and
+            <b>${nf(bays)}</b> ${bays === 1 ? "is" : "are"} placed. The station is still tagged with the sources' count, so
+            place the rest or correct <span class="mono">capacity</span> below if the imagery shows otherwise.</li>` : ""}
+          ${nudged.length ? `<li class="is-ok"><b>${nf(nudged.length)} existing charger${nudged.length === 1 ? "" : "s"}</b> moved.</li>` : ""}
+        </ul>
 
-    <div class="imp-tools">
-      <button class="imp-chip${u.tool === "outline" ? " is-on" : ""}" data-tool="outline">Outline the site</button>
-      <button class="imp-chip${u.tool === "points" ? " is-on" : ""}" data-tool="points"${
-        cfgSockets(u.cfg) ? "" : " disabled"}>Place charge points</button>
-    </div>
+        ${drawn && s.osmId ? `
+          <div class="imp-poi">
+            <b>The old point, ${esc(s.osmId)}</b>
+            <p class="imp-note">Its station tags move to the outline. It cannot stay as it is —
+               that would be two charging stations at one site.</p>
+            <div class="imp-poi-acts">
+              <button class="imp-chip${u.keep === "point" ? " is-on" : ""}" data-keep="point">Keep it as a charger</button>
+              <button class="imp-chip${u.keep === "delete" ? " is-on" : ""}" data-keep="delete">Delete it</button>
+            </div>
+          </div>` : ""}
 
-    ${u.tool === "outline" ? `
-      <div class="imp-warn">
-        <b>Tracing</b>
-        <p class="imp-note">${u.ring.length < 3
-          ? `Click the corners of the site — ${3 - u.ring.length} more before it is a shape.`
-          : `${nf(u.ring.length)} corners${u.square ? ", squared" : ", exactly as clicked"}.`}</p>
-        <div class="imp-poi-acts">
-          <button class="imp-chip${u.square ? " is-on" : ""}" id="up-square" aria-pressed="${u.square}">Square up</button>
-          <button class="imp-chip" id="up-undo"${u.ring.length ? "" : " disabled"}>Undo</button>
-          <button class="imp-chip" id="up-clear"${u.ring.length ? "" : " disabled"}>Clear</button>
-        </div>
-        <p class="imp-note">${u.square
-          ? `Right angles forced; three corners means a rectangle. Turn it off for an L, a wedge,
-             or however the site actually runs.`
-          : `Every corner stays where you put it.`}</p>
+        ${conflicts.length ? `
+          <div class="imp-warn">
+            <b>The map and the sources differ</b>
+            <p class="imp-note">What is tagged now is kept unless you tick it. Somebody may have counted
+               these on the ground — tick only what the imagery bears out.</p>
+            <div class="imp-tags">
+              ${conflicts.map((r) => `
+                <label class="tagrow diffrow is-change">
+                  <input type="checkbox" data-over="${esc(r.key)}"${u.over.has(r.key) ? " checked" : ""}>
+                  <span class="tag-k mono">${esc(r.key)}</span>
+                  <span class="tag-v">map <b>${esc(r.had)}</b> · sources <b>${esc(r.want)}</b></span>
+                  <span class="kind">use</span>
+                </label>`).join("")}
+            </div>
+          </div>` : ""}
+
+        ${!s.osmId ? `
+          <div class="imp-tags-head">
+            <span class="imp-h">Tags on the station</span>
+            <button class="imp-link" id="imp-add">Add tag</button>
+          </div>
+          <div class="imp-tags" id="imp-tags"></div>
+          <div class="imp-wd" id="imp-wd" hidden></div>
+          <div class="imp-offers" id="imp-offers"></div>`
+        : drawn && preview ? `
+          <div class="imp-h">Tags the outline will carry</div>
+          <div class="imp-tags">${Object.entries(cleanTags(preview)).map(([k, v]) => `
+            <div class="tagrow"><div class="tag-k mono">${esc(k)}</div><div class="tag-v">${esc(v)}${
+              onMap.tags[k] === v ? "" : ` <span class="tag-src" title="Filled in from the sources">new</span>`}</div><div></div></div>`).join("")}
+          </div>`
+        : drawn ? `<p class="imp-note">The point's existing tags move to the outline as they are. Counts it
+             lacks are filled in from the sources; nothing it already says is changed.</p>` : ""}
       </div>` : ""}
 
-    ${u.tool === "points" ? `
-      <div class="imp-warn">
-        <b>Placing ${esc(cfgLabel(u.cfg))}</b>
-        <p class="imp-note">Click each cabinet. ${nf(placed)} placed${
-          balanced ? " — every socket accounted for" : ""}.</p>
-        <div class="imp-poi-acts">
-          <button class="imp-chip" id="up-undo"${placed ? "" : " disabled"}>Undo</button>
-          <button class="imp-chip" id="up-clear"${placed ? "" : " disabled"}>Clear</button>
-        </div>
-      </div>` : ""}
-
-    ${ring.length > 2 && s.osmId ? `
-      <div class="imp-poi">
-        <b>What happens to ${esc(s.osmId)}</b>
-        <p class="imp-note">The station tags move to the outline. It cannot stay as it is —
-           that would be two <span class="mono">amenity=charging_station</span> at one site.</p>
-        <div class="imp-poi-acts">
-          <button class="imp-chip${u.keep === "point" ? " is-on" : ""}" data-keep="point">Make it a charge point</button>
-          <button class="imp-chip${u.keep === "delete" ? " is-on" : ""}" data-keep="delete">Delete it</button>
-        </div>
-      </div>` : ""}
+    ${evidenceCard(s)}
 
     <div class="imp-keys">
       <span>If the imagery predates the site, draw nothing.</span>
-      <span><kbd>Q</kbd> squaring · <kbd>Z</kbd> undo · <kbd>S</kbd> skip</span>
+      <span><kbd>Z</kbd> undo · <kbd>Q</kbd> square corners · <kbd>S</kbd> skip site</span>
     </div>
 
     ${CUR.log?.length ? `<div class="imp-h">Changed this session</div>
@@ -2607,18 +2767,32 @@ function upgradeCard(side) {
           <span class="mono">${r.kind === "note" ? esc(r.cs) : `#${r.cs}`}</span></div>`).join("")}</div>` : ""}
 
     <div class="imp-error" id="imp-error" hidden></div>
-    <div class="imp-actions">
-      <button class="imp-primary" id="imp-up-save"${ring.length > 2 || placed || nudged.length ? "" : " disabled"}>${
-        [ring.length > 2 ? "Draw the site" : null,
-         placed ? `add ${nf(placed)} point${placed === 1 ? "" : "s"}` : null,
-         nudged.length ? `move ${nf(nudged.length)}` : null].filter(Boolean).join(" and ")
-          .replace(/^./, (c) => c.toUpperCase()) || "Nothing drawn yet"}</button>
-      <button class="imp-ghost" id="imp-skip">Skip</button>
+    <div class="imp-actions imp-actions--steps">
+      <button class="imp-ghost" id="up-back"${step === "outline" ? " disabled" : ""}>Back</button>
+      ${step === "outline" ? `<button class="imp-primary" id="up-next"${drawn ? "" : " disabled"}>Next: mark the chargers</button>`
+        : step === "chargers" ? `<button class="imp-primary" id="up-next">Next: review</button>`
+        : `<button class="imp-primary" id="imp-up-save"${canSave ? "" : " disabled"}>${
+            canSave ? `Save ${esc(saveLabel)}` : "Nothing to save yet"}</button>`}
+      <button class="imp-ghost" id="imp-skip" title="Leave this site and go to the next one">Skip site</button>
     </div>`;
 
+  if (step === "review" && !s.osmId) {
+    paintTags();
+    side.querySelector("#imp-add").onclick = () => addTag();
+  }
   bindShapeSwitch(side);
-  side.querySelectorAll("[data-tool]").forEach((b) => {
-    b.onclick = () => { u.tool = u.tool === b.dataset.tool ? null : b.dataset.tool; paintSide(); };
+  const order = ["outline", "chargers", "review"];
+  side.querySelectorAll("[data-go]").forEach((b) => {
+    b.onclick = () => { setStep(u, b.dataset.go); paintSide(); MAP.schedule(); };
+  });
+  side.querySelector("#up-next")?.addEventListener("click", () => {
+    setStep(u, order[order.indexOf(step) + 1]); paintSide(); MAP.schedule();
+  });
+  side.querySelector("#up-back")?.addEventListener("click", () => {
+    setStep(u, order[Math.max(0, order.indexOf(step) - 1)]); paintSide(); MAP.schedule();
+  });
+  side.querySelector("#up-no-outline")?.addEventListener("click", () => {
+    u.ring = []; setStep(u, "chargers"); paintSide(); MAP.schedule();
   });
   bindEvidence(side);
   side.querySelectorAll("[data-kind]").forEach((b) => {
@@ -2627,8 +2801,6 @@ function upgradeCard(side) {
       if (!kind) return;
       u.custom = false;
       u.cfg = kindCfg(kind, u.per || 1);
-      // choosing what to place is asking to place it
-      if (u.tool !== "points") u.tool = "points";
       paintSide();
     };
   });
@@ -2744,8 +2916,16 @@ function upgradeCard(side) {
     if (u.tool === "outline") u.ring = []; else u.pts = [];
     paintSide(); MAP.schedule();
   });
-  side.querySelector("#imp-up-save").onclick = saveUpgrade;
+  side.querySelector("#imp-up-save")?.addEventListener("click", saveUpgrade);
   side.querySelector("#imp-skip").onclick = () => skip("skip");
+}
+
+/* Which step the outline-and-chargers card is on. The step decides what a
+   click on the image does — a corner, a charger, or nothing — so there is no
+   separate tool to switch on and forget about. */
+function setStep(u, step) {
+  u.step = step;
+  u.tool = step === "outline" ? "outline" : step === "chargers" ? "points" : null;
 }
 
 function undoUpgrade() {
@@ -2932,6 +3112,7 @@ async function saveUpgrade() {
   const drawing = ring.length > 2;
   const nudged = (MAP.others || []).filter((o) => o.kind === "point" && o.type === "node" && o.moved);
   if (!drawing && !u.pts.length && !nudged.length) return fail("Nothing drawn yet.");
+  if (!s.osmId && !drawing) return fail("Draw the outline first — chargers need a station around them.");
 
   CUR.busy = true;
   const btn = $("imp-up-save");
@@ -2979,8 +3160,11 @@ async function saveUpgrade() {
       /* Onto an element that already exists, the sources fill gaps and replace
          a bare "yes"; a real value that disagrees is only replaced where it
          was ticked. Onto a new one there is nothing to disagree with. */
+      /* A new site is written exactly as the review step showed it: those
+         tags were proposed from the same inventory and may since have been
+         edited, and putting a removed one back would undo the mapper. */
       const way = await createWay(ring, fillIdentity(
-        stationTags(base, siteInventory(s), { overwrite: node ? (u.over || null) : null }), u.gear), cs);
+        node ? stationTags(base, siteInventory(s), { overwrite: u.over || null }) : base, u.gear), cs);
       madeWay = way.id;
       log.push({ type: "way", id: way.id, cs, name: `${base.name || s.net} outline` });
 
@@ -3205,6 +3389,7 @@ function shell() {
           <button id="imp-recentre" title="Back to the reported position" aria-label="Recentre"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
         </div>
         <div class="imp-readout" id="imp-readout"></div>
+        <div class="imp-hint" id="imp-hint" role="status" hidden></div>
       </div>
       <aside class="imp-side" id="imp-side"></aside>
     </div>`;
@@ -3394,9 +3579,36 @@ function paintProgress() {
 
 /* ---- sidebar ---- */
 
+/* One line on the image saying what a click there does right now. The panel
+   explains the step; this is for the moment the eyes are on the imagery and
+   the question is simply "what am I clicking?". */
+function paintHint() {
+  const node = $("imp-hint");
+  if (!node) return;
+  const u = CUR.up;
+  let text = "";
+  if (CUR.site && session() && clientId()) {
+    if (nodeCard()) text = "Drag the pin onto the chargers";
+    else if (u?.step === "outline") {
+      const n = u.ring.length;
+      text = n < 3 ? `Click the corners of the charging area · ${n} of 3` : `${n} corners · click to add more, or go to the next step`;
+    } else if (u?.step === "chargers") {
+      const inv = siteInventory(CUR.site);
+      const kind = inv.kinds.find((k) => kindKey(k) === u.cfg.kind);
+      const got = kind ? placedByKind(u)[u.cfg.kind] || 0 : u.pts.length;
+      text = cfgSockets(u.cfg)
+        ? `Click each ${cfgLabel(u.cfg)}${kind ? ` · ${got} of ${kind.n}` : ` · ${got} placed`}`
+        : "Choose a charger in the panel first";
+    }
+  }
+  node.textContent = text;
+  node.hidden = !text;
+}
+
 function paintSide() {
   const side = $("imp-side");
   if (!side) return;
+  paintHint();
   // forceSetup matters because the page can ship a client id: without it,
   // "use a different client id" would clear the stored one, fall straight back
   // to the built-in, and redraw the same card.
@@ -3599,6 +3811,8 @@ function workCard(side) {
       </dl>
     </div>
 
+    ${shapeSwitch(CUR.up || { shape: "node" })}
+
     ${evidenceCard(s)}
 
     ${CUR.near.length ? `
@@ -3665,8 +3879,6 @@ function workCard(side) {
            dealership, the useful edit is the building — <b>Dealership note</b>, below, asks for
            that, and for the tags that would let this board see it afterwards.</p>
       </div>` : ""}
-
-    ${shapeSwitch(CUR.up || { shape: "node" })}
 
     <div class="imp-tags-head">
       <span class="imp-h">Tags</span>
@@ -4074,7 +4286,7 @@ async function show() {
      and a new site may still be answered with a plain node if that is all the
      imagery supports. One editor, two starting conditions. */
   if (MODE() === "upgrade" || CUR.up?.shape === "area") {
-    CUR.up = { tool: null, ring: [], pts: [], square: true, keep: "point",
+    CUR.up = { step: "outline", tool: "outline", ring: [], pts: [], square: true, keep: "point",
                shape: "area", per: 1, custom: false, over: null,
                cfg: defaultCfg(siteInventory(CUR.site)), gear: gearFor(CUR.site?.net) };
     MAP.onmapclick = upgradeClick;
@@ -4143,7 +4355,10 @@ async function show() {
       .filter((p) => metres(s, p) <= REF_PIN_MAX)
       .map((p) => ({ lat: p.lat, lon: p.lon, label: sourceMark(p.src) }));
   if (MAP.refs.length < 2) MAP.refs = [];
-  MAP.pin = MODE() === "upgrade" ? null : CUR.pin;
+  /* The pin is the single-point answer. On the outline card it would be a
+     second thing on the image that looks placeable and is not; where the
+     source put the site is still marked, as a ring (see `drawUpgrade`). */
+  MAP.pin = nodeCard() ? CUR.pin : null;
   MAP.others = [];
   MAP.setLayer(CUR.layer);
   /* Frame whatever has to be compared. Opening at a fixed z19 is right for one
@@ -4558,11 +4773,11 @@ function keys(e) {
     save();
   }
   else if (e.key === "s" || e.key === "S") { e.preventDefault(); skip("skip"); }
-  else if (MODE() === "upgrade" && (e.key === "q" || e.key === "Q")) {
+  else if (!nodeCard() && (e.key === "q" || e.key === "Q")) {
     e.preventDefault();
     if (CUR.up) { CUR.up.square = !CUR.up.square; paintSide(); MAP.schedule(); }
   }
-  else if (MODE() === "upgrade" && (e.key === "z" || e.key === "Z")) { e.preventDefault(); undoUpgrade(); }
+  else if (!nodeCard() && (e.key === "z" || e.key === "Z")) { e.preventDefault(); undoUpgrade(); }
   else if (e.key === "+" || e.key === "=") { MAP.zoomAround(MAP.W / 2, MAP.H / 2, 1); }
   else if (e.key === "-") { MAP.zoomAround(MAP.W / 2, MAP.H / 2, -1); }
 }

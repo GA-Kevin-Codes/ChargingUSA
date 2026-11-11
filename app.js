@@ -1849,6 +1849,9 @@ function paintExport() {
    three-site state at 0% from reading as a crisis is the site count beside it
    and the bar going grey below the floor. */
 const STATE_MIN_SITES = 12;
+/* The tick a finished state wears. A word goes with it everywhere it is used,
+   so "done" never rests on a glyph or a colour alone. */
+const DONE_MARK = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5 9.5 18 20 6.5"/></svg>`;
 const STATE_ORDER = [["pct", "% mapped"], ["gap", "missing"]];
 
 function renderStateCoverage(sites) {
@@ -1871,11 +1874,23 @@ function renderStateCoverage(sites) {
     .filter((r) => !q || r.code.toLowerCase().includes(q) || r.name.toLowerCase().includes(q))
     .sort((a, b) => VIEW.stateOrder === "gap" ? b.gap - a.gap : a.pct - b.pct || b.n - a.n);
 
+  /* States with nothing left to map, in the slice on screen. They are the
+     ones a mapper can stop looking at, so they are marked wherever a state
+     appears — this list, the map, its legend — rather than left to be read
+     off a bar that happens to be full. */
+  const full = [...agg].filter(([, a]) => a.n > 0 && a.gap === 0).length;
+  const key = $("legend-done");
+  if (key) {
+    key.hidden = !full;
+    key.querySelector("b").textContent = nf(full);
+  }
+
   const note = $("statemap-note");
   if (note) {
-    note.textContent = VIEW.stateOrder === "gap"
+    note.textContent = (VIEW.stateOrder === "gap"
       ? `Sites with no station on OpenStreetMap. Bar is the share already mapped.`
-      : `Least mapped first. Bar and figure are the share already mapped; states under ${STATE_MIN_SITES} sites are greyed, being too small to rank.`;
+      : `Least mapped first. Bar and figure are the share already mapped; states under ${STATE_MIN_SITES} sites are greyed, being too small to rank.`) +
+      (full ? ` ${nf(full)} ${full === 1 ? "state has" : "states have"} nothing missing${VIEW.net ? ` for ${VIEW.net}` : ""} and ${full === 1 ? "is" : "are"} ticked.` : "");
   }
 
   const tab = $("tab-states");
@@ -1885,14 +1900,22 @@ function renderStateCoverage(sites) {
      bar, so neither order hides what the other would have shown. */
   const byGap = VIEW.stateOrder === "gap";
   host.innerHTML = rows.length
-    ? rows.map((r) => `
+    ? rows.map((r) => r.gap === 0 ? `
+      <button class="row is-full${r.code === VIEW.state ? " is-on" : ""}"
+              data-state="${r.code}" aria-pressed="${r.code === VIEW.state}"
+              title="${esc(r.name)} — all ${nf(r.n)} sites are on the map">
+        <span class="row-name"><span class="code">${r.code}</span><span>${esc(r.name)}</span></span>
+        <span class="row-fig row-done">${DONE_MARK}All mapped</span>
+        <span class="row-track"><span class="row-fill" style="width:100%"></span></span>
+        <span class="row-sub">${nf(r.n)} site${r.n === 1 ? "" : "s"}</span>
+      </button>` : `
       <button class="row${r.code === VIEW.state ? " is-on" : ""}${r.n < STATE_MIN_SITES ? " is-thin" : ""}"
               data-state="${r.code}" aria-pressed="${r.code === VIEW.state}"
               title="${esc(r.name)} — ${nf(r.m)} of ${nf(r.n)} mapped, ${nf(r.gap)} missing, ${nf(r.ports)} ports">
         <span class="row-name"><span class="code">${r.code}</span><span>${esc(r.name)}</span></span>
-        <span class="row-fig">${byGap ? nf(r.gap) : Math.round(r.pct) + "%"}</span>
+        <span class="row-fig">${byGap ? nf(r.gap) : Math.floor(r.pct) + "%"}</span>
         <span class="row-track"><span class="row-fill" style="width:${r.pct.toFixed(1)}%"></span></span>
-        <span class="row-sub">${byGap ? Math.round(r.pct) + "% mapped" : nf(r.gap) + " missing"}</span>
+        <span class="row-sub">${byGap ? Math.floor(r.pct) + "% mapped" : nf(r.gap) + " missing"}</span>
       </button>`).join("")
     : `<p class="empty">No state matches that.</p>`;
 
@@ -2181,9 +2204,11 @@ function initControls() {
   const states = [...new Set(MERGED.sites.map((s) => s.state).filter(Boolean))]
     .map((code) => [code, STATES?.[code]?.name || code])
     .sort((a, b) => a[1].localeCompare(b[1]));
+  const open = new Set(MERGED.sites.filter((s) => !s.osm).map((s) => s.state));
   sel.innerHTML = `<option value="">Every state</option>` +
     states.map(([code, name]) =>
-      `<option value="${esc(code)}">${esc(name === code ? code : `${name} (${code})`)}</option>`).join("");
+      `<option value="${esc(code)}">${esc(name === code ? code : `${name} (${code})`)}${
+        open.has(code) ? "" : " — all mapped"}</option>`).join("");
   sel.value = VIEW.state || "";
   /* Still the one mechanism. The map's click and the ranked list both set this
      and fire change, so there is a single place that decides what "this state"
