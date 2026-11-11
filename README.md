@@ -19,13 +19,13 @@ value there rather than in the scripts.
 
 ## Level 2
 
-The board is about fast charging by default. The **Level 2 too** switch adds
+The board is about fast charging by default. The **Level 2** switch adds
 AFDC's Level 2 stations — about 68,000 records, Tesla's destination chargers
 among them — from `data/afdc-l2.json`, which the daily refresh writes and the
 page loads only when the switch is on. A network's Level 2 posts beside its
 fast chargers become one site with both. Level 2 sites are proposed with
 `frequency=60`, fast ones with `frequency=0`, and a site with both gets
-neither.
+`frequency=0;60`.
 
 ## Sources
 
@@ -56,6 +56,10 @@ GeoJSON export are all read off it, so they cannot disagree with one another.
 - Free text becomes a tag only when it parses cleanly, and is otherwise shown
   in the source's own words. A price is written as `fee=yes` and never as
   `charge`: tariffs change too often for the amount to be worth mapping.
+- `access=yes` is for a site open widely to the public. One limited to a set
+  of customers — a hotel's guests, or one make of vehicle, such as a
+  Tesla-only Supercharger — is `access=customers`. Where the source narrows
+  it some other way (staff, a permit, "call ahead") nothing is proposed.
 - The address is proposed by default. The street is written out in full and
   stops at its type word — "555 W 44th St PUBLIC WORKS" is `West 44th Street`,
   and the rest is shown as where on the property to look.

@@ -1695,13 +1695,48 @@ const CARD_TAG = {
   APPLE_PAY: "payment:apple_pay", ANDROID_PAY: "payment:google_pay", Cash: "payment:cash",
 };
 
-/* Does anything the source says narrow who may use it? Read off the remark
-   after the hours and off AFDC's own access detail. When it does, `access` is
-   not proposed at all: "public, call ahead" and "for guest use only" are not
-   `access=yes`, and which value they are is a judgement the chips below the
-   tags exist for. */
-const NARROWED = /\b(only|permit|guests?|customers?|members?|employees?|residents?|students|staff|call|desk)\b/i;
-const accessNarrowed = (s) => s.accessDetail === "CALL" || NARROWED.test(String(s.hours || "").replace(/open to teslas only|open to all[^.;]*/gi, ""));
+/* Who may use it, as far as the source says.
+
+   `access` on a charging station is about the customer, and it has three
+   answers here:
+
+     yes         open widely to the public, and nothing in the source says
+                 otherwise.
+     customers   open to a particular set of customers. That is the host's —
+                 "for guest use only" — and equally a make of vehicle: a site
+                 that charges Teslas only is vehicle-exclusive, which the wiki
+                 files under `customers`, not `yes`.
+     (nothing)   the source narrows it in a way that is not about customers —
+                 staff, residents, a permit, "call ahead" — or the site looks
+                 like a dealership. Which value that is takes a judgement, and
+                 the chips under the tags make it one click.
+
+   For a Supercharger, supercharge.info's own flag is the evidence: it tracks
+   which sites have been opened to other makes, and AFDC's remark can lag. */
+const BRAND_ONLY = /\bopen to (teslas?|[\w' ]+?) only\b|\bfor ([\w' -]+?) use only\b|\b(guests?|customers?|patrons?|visitors?)( use)? only\b/i;
+const NOT_CUSTOMERS = /\b(employees?|staff|residents?|tenants?|students?|members?|fleet|dealership|business|officials?|government|permit|approval|desk|call|key ?card|badge)\b/i;
+function accessFor(s) {
+  const src = sourceMark(s.src);
+  if (typeof s.other === "boolean") {
+    return s.other
+      ? { value: "yes", by: src, why: `${s.src} lists this site as open to other makes` }
+      : { value: "customers", by: src, why: `${s.src}: Tesla vehicles only — a vehicle-exclusive site is access=customers` };
+  }
+  const remark = String(s.hours || "");
+  const only = BRAND_ONLY.exec(remark);
+  // who it is "only" for decides: guests and Rivians are customers, staff are not
+  if (only && !NOT_CUSTOMERS.test(only[0])) {
+    return { value: "customers", by: "AFDC", why: `AFDC: “${s.hours}” — limited to one set of customers` };
+  }
+  if (s.accessDetail === "CALL" || NOT_CUSTOMERS.test(remark.replace(/\bbusiness hours\b/gi, "")) || only) return null;
+  if (looksLikeDealer(s)) return null;
+  return { value: "yes", by: src, why: `${s.src} lists this as open to the public, with no limit on who` };
+}
+
+/* 0 for DC, 60 for AC in the US, and both where a site — or one cabinet — has
+   both. */
+const FREQ = (dc, ac) => (dc && ac ? "0;60" : dc ? "0" : ac ? "60" : null);
+const siteFrequency = (inv) => FREQ(inv.kinds.some((k) => k.dc), inv.kinds.some((k) => !k.dc));
 
 function proposeTags(s, why = {}) {
   const t = { amenity: "charging_station" };
@@ -1828,25 +1863,20 @@ function proposeTags(s, why = {}) {
       say(`socket:${k}`, "usual", `What ${s.net} sites carry; no source itemises this one`);
     }
   }
-  /* DC throughout is 0; AC throughout is the mains, which in the US is 60 Hz.
-     A site with both gets neither: the tag describes the whole station, and
-     no one number is true of that one. */
-  if (inv.kinds.length && inv.kinds.every((k) => k.dc)) {
-    t.frequency = "0";
-    say("frequency", "DC", "Every port here is direct current");
-  } else if (inv.kinds.length && inv.kinds.every((k) => !k.dc)) {
-    t.frequency = "60";
-    say("frequency", "AC", "Every port here is alternating current — 60 Hz in the US");
+  /* DC is 0; AC is the mains, which in the US is 60 Hz. A site with both says
+     both, as "0;60" — the outputs on the socket tags are what say which
+     cables are which. */
+  const freq = siteFrequency(inv);
+  if (freq) {
+    t.frequency = freq;
+    say("frequency", freq === "0" ? "DC" : freq === "60" ? "AC" : "AC+DC",
+      freq === "0" ? "Every port here is direct current"
+      : freq === "60" ? "Every port here is alternating current — 60 Hz in the US"
+      : "Direct current and 60 Hz alternating current are both offered here");
   }
 
-  /* Public, as the source lists it — unless the same source goes on to say
-     who it is really for, in which case the question is left open. A site that
-     looks like a dealership is left open too; the chips under the tags answer
-     it in one click either way. */
-  if (!accessNarrowed(s) && !looksLikeDealer(s)) {
-    t.access = "yes";
-    say("access", own, `${s.src} lists this as open to the public`);
-  }
+  const access = accessFor(s);
+  if (access) { t.access = access.value; say("access", access.by, access.why); }
 
   const hours = s.hoursOsm ? (HOURS_OK.test(s.hours || "") ? s.hours : null) : parseHours(s.hours);
   if (hours) { t.opening_hours = hours; say("opening_hours", s.hoursOsm ? own : "AFDC", `${s.hoursOsm ? s.src : "AFDC"}: "${s.hours}"`); }
@@ -2074,13 +2104,13 @@ function pointTags(cfg, gear = null, from = null) {
   }
   const bays = cfgBays(cfg);
   if (bays) t.capacity = String(bays);
-  /* DC is frequency zero and AC is the US mains at 60 — each only on a cabinet
-     with nothing else on it. Whether a cabinet is AC comes from its kind where
-     it has one, since a NACS plug is either; built by hand, the plugs are all
+  /* DC is frequency zero and AC is the US mains at 60; a cabinet with a cable
+     of each carries both. Whether a cabinet is AC comes from its kind where it
+     has one, since a NACS plug is either; built by hand, the plugs are all
      there is to go on. */
-  const isAc = cfg.dc === false || (cfg.dc == null && types.every(([key]) => !DC_SOCKET.has(key)));
-  const isDc = cfg.dc === true || (cfg.dc == null && types.every(([key]) => DC_SOCKET.has(key)));
-  if (types.length) { if (isAc) t.frequency = "60"; else if (isDc) t.frequency = "0"; }
+  const freq = cfg.dc != null ? FREQ(cfg.dc, !cfg.dc)
+    : FREQ(types.some(([key]) => DC_SOCKET.has(key)), types.some(([key]) => !DC_SOCKET.has(key)));
+  if (freq) t.frequency = freq;
   return { ...t, ...gearTags(gear), ...inherited(from) };
 }
 
@@ -2195,8 +2225,8 @@ function stationFacts(inv, split = false) {
       ? e.powers.map(([kw]) => withUnit(kw, "kW")).join(";") : withUnit(e.max || e.peak, "kW");
   }
   if (inv.capacity) t.capacity = String(inv.capacity);
-  if (inv.kinds.length && inv.kinds.every((k) => k.dc)) t.frequency = "0";
-  else if (inv.kinds.length && inv.kinds.every((k) => !k.dc)) t.frequency = "60";
+  const freq = siteFrequency(inv);
+  if (freq) t.frequency = freq;
   return t;
 }
 
@@ -4826,7 +4856,7 @@ window.OSMKit = {
      offers under their old export name, kept so the name `extraTags` above
      goes on meaning what it always has. */
   proposeTags, offers, extraTags2: offers, stationTags, stationFacts, stationConflicts,
-  pointTags, kindCfg, defaultCfg, cfgBays, parseHours, parsePrice, startDate, expandStreet,
+  pointTags, kindCfg, defaultCfg, cfgBays, parseHours, parsePrice, startDate, expandStreet, accessFor,
 };
 
 const btn = $("improve-open");

@@ -234,6 +234,34 @@ if (K.expandStreet) table("expandStreet", K.expandStreet, [
   ["", null], [null, null],
 ]);
 
+/* Who may use it. The site is a stand-in with only the fields `accessFor`
+   reads; `fac: "OTHER"` keeps the dealership guess out of the way. */
+if (K.accessFor) table("accessFor", (a) => K.accessFor({ src: "AFDC", fac: "OTHER", name: "x", ...a })?.value ?? null, [
+  [{ hours: "24 hours daily" }, "yes"],
+  [{ hours: "24 hours daily. Open to all vehicles." }, "yes"],
+  [{ hours: "24 hours daily. NACS partner enabled." }, "yes"],
+  [{ hours: "24 hours daily; pay lot" }, "yes"],
+  [{}, "yes"],
+  // one set of customers, whether the host's or a make of vehicle
+  [{ hours: "24 hours daily. Open to Teslas only." }, "customers"],
+  [{ hours: "24 hours daily; for guest use only" }, "customers"],
+  [{ hours: "24 hours daily; for Rivian use only" }, "customers"],
+  [{ hours: "Dealership business hours; for customer use only" }, "customers"],
+  [{ hours: "24 hours daily; customers only" }, "customers"],
+  // narrowed, but not to customers: left for the mapper
+  [{ hours: "24 hours daily; students and staff only" }, null],
+  [{ hours: "24 hours daily; for dealership use only" }, null],
+  [{ hours: "24 hours daily; for EVohana member use only" }, null],
+  [{ hours: "24 hours daily; parking permit required" }, null],
+  [{ hours: "8:30am-6pm M-F; see front desk for access" }, null],
+  [{ accessDetail: "CALL", hours: "24 hours daily" }, null],
+  [{ fac: "CAR_DEALER", hours: "Dealership business hours" }, null],
+  [{ hours: "Garage business hours" }, "yes"],                       // "business" here is the hours, not the user
+  // a Supercharger goes by supercharge.info's flag, whatever AFDC's remark says
+  [{ src: "supercharge.info", other: false, hours: "24 hours daily. NACS partner enabled." }, "customers"],
+  [{ src: "supercharge.info", other: true, hours: "24 hours daily. Open to Teslas only." }, "yes"],
+]);
+
 /* ----------------------------------------------------------- every site */
 
 const M = T.MERGED;
@@ -381,12 +409,15 @@ for (const s of M.sites) {
   }
   if (counted && tags.capacity && cables && Number(tags.capacity) > cables)
     fail("proposal: capacity exceeds the sockets proposed", `${id(s)} capacity=${tags.capacity} sockets=${cables}`);
-  if (tags.frequency === "0" && inv.kinds.some((k) => !k.dc))
-    fail("proposal: frequency=0 on a site with AC ports", id(s));
-  if (tags.frequency === "60" && inv.kinds.some((k) => k.dc))
-    fail("proposal: frequency=60 on a site with DC ports", id(s));
-  if (inv.kinds.length && inv.kinds.every((k) => !k.dc) && tags.frequency !== "60")
-    fail("proposal: an all-AC site without frequency=60", id(s));
+  if (inv.kinds.length) {
+    const want = inv.kinds.some((k) => k.dc) ? (inv.kinds.some((k) => !k.dc) ? "0;60" : "0") : "60";
+    if (tags.frequency !== want) fail("proposal: frequency does not say what the site has", `${id(s)} ${tags.frequency}, wanted ${want}`);
+  } else if (tags.frequency != null) fail("proposal: a frequency with no ports to base it on", id(s));
+  if (tags.access != null && !/^(yes|customers)$/.test(tags.access)) fail("proposal: access is neither yes nor customers", `${id(s)} ${tags.access}`);
+  // the two the user would otherwise have to correct by hand
+  if (s.other === false && tags.access !== "customers") fail("proposal: a Tesla-only site not proposed as access=customers", id(s));
+  if (typeof s.other !== "boolean" && /open to teslas only|use only|guests? only|customers? only/i.test(s.hours || "") && tags.access === "yes")
+    fail("proposal: access=yes where the source limits who may charge", `${id(s)} ${s.hours}`);
   /* Level 2 sites are AC by definition, whatever plug they carry. This is the
      check a Tesla destination charger fails if its NACS cable is read as a
      Supercharger's. Read off the raw units, not the inventory. */
