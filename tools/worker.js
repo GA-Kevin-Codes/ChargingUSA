@@ -198,23 +198,92 @@ function slimOsm(el) {
 function unitKinds(rows) {
   const by = new Map();
   for (const u of rows || []) {
-    const conn = {};
+    const conn = {}, pw = {};
     let kw = 0;
     for (const [k, v] of Object.entries(u.connectors || {})) {
       if (!(v?.port_count > 0)) continue;
       conn[k] = v.port_count;
+      if (v.power_kw > 0) pw[k] = v.power_kw;
       if (v.power_kw > kw) kw = v.power_kw;
     }
     const names = Object.keys(conn).sort();
     if (!names.length) continue;
+    /* Power is per connector, and it has to stay that way. One number per unit
+       — the largest — was kept here before, which is right for a unit with one
+       connector type and wrong for 2,966 of the rest: a twin-head cabinet
+       offering CCS at 150 kW and CHAdeMO at 50 kW went downstream as "150 kW",
+       and the editor then proposed `socket:chademo:output=150 kW`.
+
+       `kw` is still written, as the unit's best figure, because a board built
+       before `pw` existed reads only that. `pw` rides along on every unit with
+       more than one connector type, and on a single-connector unit never: there
+       `kw` already is the connector's own figure. That rule is what lets a
+       reader tell the two payload shapes apart without a version stamp — a
+       multi-connector unit with no `pw` can only be the old shape, where which
+       connector the number belongs to is not known. */
+    const same = names.length === 1;
     // No `charging_level`: it repeats what the connector names already say, and
     // at 19,500 entries the repetition is a quarter of a megabyte.
-    const key = `${kw}|${names.map((k) => `${k}:${conn[k]}`).join(",")}`;
+    const key = `${names.map((k) => `${k}:${conn[k]}@${pw[k] ?? ""}`).join(",")}`;
     const hit = by.get(key);
     if (hit) { hit.n++; continue; }
-    by.set(key, { n: 1, kw: kw || null, conn });
+    by.set(key, { n: 1, kw: kw || null, conn, ...(same ? {} : { pw }) });
   }
   return [...by.values()].sort((a, b) => b.n - a.n);
+}
+
+/* Shape one AFDC record. Split from the fetch so the stress test can run the
+   same slimming over a saved response instead of a second copy of it.
+
+   The optional fields are everything AFDC says about a site beyond where it is
+   and how many ports it has. They used to be dropped on the way in, which left
+   the editor proposing a bare station where the source had hours, a price, the
+   cards the reader takes and a line about which corner of the car park to look
+   in. Each is written only where AFDC has a value, so the common case costs
+   nothing. */
+function slimAfdc(s) {
+  const u = unitKinds(s.ev_charging_units);
+  const opt = (k, v) => (v == null || v === "" ? {} : { [k]: v });
+  return {
+    id: s.id,
+    net: s.ev_network,
+    name: s.station_name,
+    lat: s.latitude,
+    lon: s.longitude,
+    ports: s.ev_dc_fast_num || 0,
+    state: s.state,
+    city: s.city,
+    street: s.street_address,
+    open: s.open_date,
+    conf: s.date_last_confirmed,
+    fac: s.facility_type,
+    conn: s.ev_connector_types || [],
+    // omitted where the site has none worth stating, so 15,000 empty arrays
+    // do not ride along in the payload
+    ...(u.length ? { units: u } : {}),
+    restricted: !!s.restricted_access,
+    accessDetail: s.access_detail_code || null,
+    ...opt("zip", s.zip),
+    ...opt("hours", s.access_days_time),
+    ...opt("price", s.ev_pricing),
+    ...opt("cards", s.cards_accepted),
+    // where on the property: "1st floor of parking garage", "by the service entrance"
+    ...opt("dir", s.intersection_directions),
+    /* How AFDC came by the coordinate. "GPS" is the norm and is left out; the
+       other codes mean it was geocoded from the street address, which lands on
+       the building or the kerb rather than the equipment — 1,018 sites, and the
+       mapper should know before trusting the pin. */
+    ...(s.geocode_status && s.geocode_status !== "GPS" ? { geo: s.geocode_status } : {}),
+    // light-duty is the default and says nothing; MD and HD are worth a tag
+    ...(s.maximum_vehicle_class && s.maximum_vehicle_class !== "LD" ? { cls: s.maximum_vehicle_class } : {}),
+    /* The operator's own id for the site. For Electrify America it is the same
+       number All the Places calls `ref`, so the two records can be paired
+       outright instead of by which coordinates landed nearest — 1,196 of 1,227
+       sites. Kept for that network alone: every other operator's id is either
+       a UUID nothing else quotes or a number no second source shares, and
+       11,000 of them would be a quarter of a megabyte of nothing. */
+    ...(s.ev_network === "Electrify America" ? opt("nid", s.ev_network_ids?.station?.[0]) : {}),
+  };
 }
 
 async function afdc(env) {
@@ -232,26 +301,7 @@ async function afdc(env) {
     records: body.fuel_stations.length,
     // access_code=public still lets through gated and key-only sites: AFDC marks
     // those with restricted_access, and access_detail_code carries the reason.
-    sites: body.fuel_stations.map((s) => ({
-      id: s.id,
-      net: s.ev_network,
-      name: s.station_name,
-      lat: s.latitude,
-      lon: s.longitude,
-      ports: s.ev_dc_fast_num || 0,
-      state: s.state,
-      city: s.city,
-      street: s.street_address,
-      open: s.open_date,
-      conf: s.date_last_confirmed,
-      fac: s.facility_type,
-      conn: s.ev_connector_types || [],
-      // omitted where the site has none worth stating, so 15,000 empty arrays
-      // do not ride along in the payload
-      ...(() => { const u = unitKinds(s.ev_charging_units); return u.length ? { units: u } : {}; })(),
-      restricted: !!s.restricted_access,
-      accessDetail: s.access_detail_code || null,
-    })),
+    sites: body.fuel_stations.map(slimAfdc),
   };
 }
 
@@ -262,25 +312,36 @@ async function tesla(env) {
   return {
     source: "supercharge.info",
     generated: new Date().toISOString().slice(0, 10),
-    sites: body
-      .filter((s) => s.address?.country === "USA")
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        status: s.status,
-        lat: s.gps.latitude,
-        lon: s.gps.longitude,
-        ports: s.stallCount,
-        state: s.address.state,
-        city: s.address.city,
-        street: s.address.street,
-        open: s.dateOpened || null,
-        power: s.powerKilowatt || null,
-        stalls: s.stalls || {},
-        plugs: s.plugs || {},
-        // Restrictions turn up in any of these three free-text fields.
-        notes: [s.accessNotes, s.addressNotes, s.hours].filter(Boolean).join(" ") || null,
-      })),
+    sites: body.filter((s) => s.address?.country === "USA").map(slimTesla),
+  };
+}
+
+function slimTesla(s) {
+  return {
+    id: s.id,
+    name: s.name,
+    status: s.status,
+    lat: s.gps.latitude,
+    lon: s.gps.longitude,
+    ports: s.stallCount,
+    state: s.address.state,
+    city: s.address.city,
+    street: s.address.street,
+    open: s.dateOpened || null,
+    power: s.powerKilowatt || null,
+    stalls: s.stalls || {},
+    plugs: s.plugs || {},
+    // Restrictions turn up in any of these three free-text fields.
+    notes: [s.accessNotes, s.addressNotes, s.hours].filter(Boolean).join(" ") || null,
+    ...(s.address.zip ? { zip: s.address.zip } : {}),
+    // the business whose car park it is — the thing to look for on imagery
+    ...(s.facilityName ? { host: s.facilityName } : {}),
+    // which floor of the garage, which side of the building
+    ...(s.addressNotes ? { dir: s.addressNotes } : {}),
+    /* Whether other makes can charge here. False is a Tesla-only site; it is
+       stated rather than left to be inferred from the plug list, because a
+       NACS-only site can be open to anyone with an adapter. */
+    ...(typeof s.otherEVs === "boolean" ? { other: s.otherEVs } : {}),
   };
 }
 
@@ -322,26 +383,60 @@ async function atp(env, spider) {
   return {
     source: `All the Places · ${spider}`,
     run: run_id,
-    sites: body.features.map((f) => {
-      const p = f.properties;
-      const sockets = {};
-      for (const [k, v] of Object.entries(p)) {
-        const m = /^socket:([a-z0-9_]+)$/.exec(k);
-        if (m && v !== "no") sockets[m[1]] = /^\d+$/.test(String(v)) ? Number(v) : 1;
-      }
-      return {
-        ref: p.ref,
-        kind: p.amenity === "charging_station" ? "site" : "point",
-        name: p.name || p.branch || null,
-        lat: f.geometry?.coordinates?.[1] ?? null,
-        lon: f.geometry?.coordinates?.[0] ?? null,
-        state: p["addr:state"] || null,
-        city: p["addr:city"] || null,
-        capacity: p.capacity ? Number(p.capacity) : null,
-        access: p.access || null,
-        sockets,
-      };
-    }),
+    sites: body.features.map(slimAtp),
+  };
+}
+
+function slimAtp(f) {
+  const p = f.properties;
+  const sockets = {}, out = {}, amp = {}, volt = {}, vague = [];
+  const num = (v) => { const n = parseFloat(String(v)); return n > 0 ? n : null; };
+  for (const [k, v] of Object.entries(p)) {
+    const m = /^socket:([a-z0-9_]+)(?::(output|current|voltage))?$/.exec(k);
+    if (!m) continue;
+    if (!m[2]) {
+      if (v === "no") continue;
+      const counted = /^\d+$/.test(String(v));
+      sockets[m[1]] = counted ? Number(v) : 1;
+      /* `yes` says the connector is there and nothing about how many. It is
+         still stored as 1 — a board that predates this reads only `sockets` —
+         but named here, so a reader that knows the difference does not mistake
+         "present" for "exactly one". Electrify America's posts are all of this
+         kind, and most of them carry two CCS cables. */
+      if (!counted) vague.push(m[1]);
+    } else {
+      const n = num(v);
+      if (n) ({ output: out, current: amp, voltage: volt })[m[2]][m[1]] = n;
+    }
+  }
+  const has = (o) => Object.keys(o).length > 0;
+  const opt = (k, v) => (v == null || v === "" ? {} : { [k]: v });
+  return {
+    ref: p.ref,
+    kind: p.amenity === "charging_station" ? "site" : "point",
+    name: p.name || p.branch || null,
+    lat: f.geometry?.coordinates?.[1] ?? null,
+    lon: f.geometry?.coordinates?.[0] ?? null,
+    state: p["addr:state"] || null,
+    city: p["addr:city"] || null,
+    capacity: p.capacity ? Number(p.capacity) : null,
+    access: p.access || null,
+    sockets,
+    /* What each connector delivers, where the operator publishes it. The
+       station's own page is the best source there is for this — it is what the
+       unit is configured to — and it was being parsed off and thrown away. */
+    ...(has(out) ? { out } : {}),
+    ...(has(amp) ? { amp } : {}),
+    ...(has(volt) ? { volt } : {}),
+    ...(vague.length ? { vague } : {}),
+    // on the site only: every one of its charge points repeats the same address
+    ...(p.amenity === "charging_station"
+      ? { ...opt("street", p["addr:street_address"]), ...opt("zip", p["addr:postcode"]) } : {}),
+    // the operator's page for this one site, not its home page
+    ...opt("web", p.website),
+    ...opt("fee", p.fee),
+    ...opt("pfee", p["parking:fee"]),
+    ...opt("hours", p.opening_hours),
   };
 }
 
@@ -424,4 +519,4 @@ function err(status, message, origin) {
   });
 }
 
-export { slimOsm, splitOsm, slimEli };
+export { slimOsm, splitOsm, slimEli, slimAfdc, slimTesla, slimAtp, unitKinds };

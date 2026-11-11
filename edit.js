@@ -117,7 +117,7 @@ const sourceMark = (src) => {
   if (/supercharge/i.test(s)) return "SC.info";
   if (/electrify/i.test(s)) return "EA";
   if (/ionna/i.test(s)) return "IONNA";
-  if (/^ATP/i.test(s)) return "ATP";
+  if (/^ATP|all the places/i.test(s)) return "ATP";
   return s.slice(0, 8);
 };
 
@@ -1120,7 +1120,7 @@ class TileMap {
     cv.style.width = `${W}px`; cv.style.height = `${H}px`;
     const ctx = cv.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = cssv("--sunken");
+    ctx.fillStyle = cssv("--imagery-void");
     ctx.fillRect(0, 0, W, H);
 
     const L = this.layer;
@@ -1155,11 +1155,11 @@ class TileMap {
     if (this.drawOthers) this.drawOthers(ctx, this);
     else for (const o of this.others) {
       const [x, y] = this.toPx(o.lat, o.lon);
-      ctx.strokeStyle = cssv("--s3");
+      ctx.strokeStyle = cssv("--pin-ok");
       ctx.fillStyle = "rgba(0,0,0,.35)";
       ctx.lineWidth = 2.4;
       ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.284); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.arc(x, y, 2.4, 0, 6.284); ctx.fillStyle = cssv("--s3"); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, 2.4, 0, 6.284); ctx.fillStyle = cssv("--pin-ok"); ctx.fill();
     }
 
     /* Every source's own coordinate for this site, so a disagreement between
@@ -1169,12 +1169,12 @@ class TileMap {
        imagery shows. Drawn as crosses: the pin is a place, these are claims. */
     if (this.refs?.length && this.pin) {
       const p = this.toPx(this.pin.lat, this.pin.lon);
-      ctx.font = "600 9px 'IBM Plex Mono', monospace";
+      ctx.font = "600 9.5px 'Overpass Mono', monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "bottom";
       for (const r of this.refs) {
         const [x, y] = this.toPx(r.lat, r.lon);
-        ctx.strokeStyle = cssv("--s4");
+        ctx.strokeStyle = cssv("--pin-warn");
         ctx.setLineDash([3, 3]); ctx.lineWidth = 1.1;
         ctx.globalAlpha = 0.55;
         ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(p[0], p[1]); ctx.stroke();
@@ -1189,7 +1189,7 @@ class TileMap {
           ctx.fillStyle = "rgba(14,13,13,.72)";
           const w = ctx.measureText(r.label).width + 6;
           ctx.fillRect(x - w / 2, y - 18, w, 11);
-          ctx.fillStyle = cssv("--s4");
+          ctx.fillStyle = cssv("--pin-warn");
           ctx.fillText(r.label, x, y - 8);
         }
       }
@@ -1197,7 +1197,7 @@ class TileMap {
       // one source, so there is nothing to compare — the original single mark
       const g = this.toPx(this.ghost.lat, this.ghost.lon);
       const p = this.toPx(this.pin.lat, this.pin.lon);
-      ctx.strokeStyle = cssv("--s4");
+      ctx.strokeStyle = cssv("--pin-warn");
       ctx.setLineDash([4, 4]); ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.moveTo(g[0], g[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
       ctx.setLineDash([]);
@@ -1212,7 +1212,7 @@ class TileMap {
     ctx.save();
     ctx.translate(x, y);
     ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
-    ctx.fillStyle = cssv("--accent");
+    ctx.fillStyle = cssv("--pin");
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.bezierCurveTo(-9, -8, -11, -16, -11, -20);
@@ -1220,10 +1220,10 @@ class TileMap {
     ctx.bezierCurveTo(11, -16, 9, -8, 0, 0);
     ctx.fill();
     ctx.shadowColor = "transparent";
-    ctx.fillStyle = cssv("--surface");
+    ctx.fillStyle = cssv("--pin-core");
     ctx.beginPath(); ctx.arc(0, -20, 4.2, 0, 6.284); ctx.fill();
     // the point of the pin is the coordinate, so mark it exactly
-    ctx.strokeStyle = cssv("--accent"); ctx.lineWidth = 1;
+    ctx.strokeStyle = cssv("--pin"); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(-5, 0); ctx.lineTo(5, 0); ctx.stroke();
     ctx.restore();
   }
@@ -1234,17 +1234,22 @@ class TileMap {
     const pow = 10 ** Math.floor(Math.log10(target));
     const nice = [1, 2, 5, 10].find((k) => k * pow >= target) * pow;
     const px = nice / mPerPx;
-    ctx.strokeStyle = cssv("--ink");
-    ctx.fillStyle = cssv("--ink");
-    ctx.globalAlpha = 0.75;
+    /* The scale sits on imagery, which is dark whatever the page is doing, so
+       it takes the imagery tokens rather than the page's ink — and a shadow,
+       because a white bar over a white roof is no scale at all. */
+    ctx.strokeStyle = cssv("--pin-ink");
+    ctx.fillStyle = cssv("--pin-ink");
+    ctx.shadowColor = "rgba(0,0,0,.8)"; ctx.shadowBlur = 3;
+    ctx.globalAlpha = 0.95;
     ctx.lineWidth = 2;
     const y = H - 16, x = 14;
     ctx.beginPath();
     ctx.moveTo(x, y - 5); ctx.lineTo(x, y); ctx.lineTo(x + px, y); ctx.lineTo(x + px, y - 5);
     ctx.stroke();
-    ctx.font = '11px "IBM Plex Mono", monospace';
+    ctx.font = '600 11px "Overpass Mono", monospace';
     ctx.fillText(nice >= 1000 ? `${nice / 1000} km` : `${nice} m`, x + px + 7, y + 1);
     ctx.globalAlpha = 1;
+    ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
   }
 }
 
@@ -1444,9 +1449,179 @@ function syncMemory(key) {
 // the board's label for it, which the editor can correct before saving.
 const networkFor = (s) => NETWORKS[s.net] || { brand: s.net };
 
-function proposeTags(s) {
+/* ---- free text from a source, as an OSM value or not at all ----
+
+   Each of these takes a field somebody typed and returns the tag it supports,
+   or null. Null is the common and the correct answer: "Dealership business
+   hours" is a true statement about a site and not an `opening_hours` value,
+   and writing a guess at one would be worse than writing nothing. What does
+   not parse is still shown on the card, in the source's own words. */
+
+const DAY = { mon: "Mo", tue: "Tu", wed: "We", thu: "Th", fri: "Fr", sat: "Sa", sun: "Su" };
+const DAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+const HOURS_OK = /^(24\/7|(Mo|Tu|We|Th|Fr|Sa|Su)[A-Za-z0-9 ,;:-]*)$/;
+
+// "6:00am" → "06:00"; as the end of a range, 11:59pm and midnight are 24:00
+function clock(text, end = false) {
+  const m = /^(\d{1,2})(?::(\d\d))?\s*([ap])m$/i.exec(String(text).trim());
+  if (!m) return null;
+  let h = Number(m[1]) % 12;
+  const min = Number(m[2] || 0);
+  if (m[3].toLowerCase() === "p") h += 12;
+  if (h > 23 || min > 59) return null;
+  if (end && ((h === 23 && min === 59) || (h === 0 && min === 0))) return "24:00";
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+const span = (text) => {
+  const m = /^(.+?)\s*-\s*(.+)$/.exec(String(text).trim());
+  const from = m && clock(m[1]), to = m && clock(m[2], true);
+  return from && to ? `${from}-${to}` : null;
+};
+
+function parseHours(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  /* "24 hours daily", and the same with a remark after it — "NACS partner
+     enabled", "pay lot". The remark is about who or how, never about when, so
+     the hours stand; what it says about access is read separately. */
+  if (/^24 hours daily(\s*[.;]|$)/i.test(t)) return "24/7";
+  // "6:00am-12:00am daily"
+  const daily = /^(\S+\s*-\s*\S+) daily(\s*[.;]|$)/i.exec(t);
+  if (daily) { const r = span(daily[1]); return r ? (r === "00:00-24:00" ? "24/7" : `Mo-Su ${r}`) : null; }
+  // "Mon: 6:00am-10:00pm; Tue: …" — every part has to parse or none of it is used
+  const by = new Map();
+  for (const part of t.split(";")) {
+    const m = /^\s*(mon|tue|wed|thu|fri|sat|sun)[a-z]*:\s*(.+)$/i.exec(part);
+    if (!m) return null;
+    const ranges = m[2].split(",").map(span);
+    if (ranges.some((r) => !r)) return null;
+    by.set(DAY[m[1].toLowerCase()], joinSpans(ranges));
+  }
+  if (!by.size) return null;
+  if (by.size === 7 && [...by.values()].every((v) => v === "00:00-24:00")) return "24/7";
+  // consecutive days that keep the same hours become one rule
+  const rules = [];
+  for (let i = 0; i < 7; i++) {
+    const v = by.get(DAYS[i]);
+    if (!v) continue;
+    let j = i;
+    while (j + 1 < 7 && by.get(DAYS[j + 1]) === v) j++;
+    rules.push(`${DAYS[i]}${j > i ? `-${DAYS[j]}` : ""} ${v}`);
+    i = j;
+  }
+  const out = rules.join("; ");
+  return out.length <= 255 ? out : null;
+}
+
+/* Ranges that touch are one range. Some records give a day as a run of
+   back-to-back periods — "12:01am-7:59am, 8:00am-9:00am, 9:01am-6:59pm, …" —
+   which is a tariff schedule filed under hours: the site is open throughout
+   and only the price changes. Written out as given it is 400 characters of
+   opening hours that say "all day". A gap of a minute is the register's way
+   of not overlapping, so it is closed; a real gap is kept. */
+function joinSpans(ranges) {
+  const mins = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+  const fmt = (n) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+  const list = ranges.map((r) => r.split("-").map(mins)).sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [from, to] of list) {
+    const last = out[out.length - 1];
+    if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to);
+    else out.push([from <= 1 ? 0 : from, to]);
+  }
+  return out.map(([a, b]) => `${fmt(a)}-${fmt(b)}`).join(",");
+}
+
+/* A price. `fee` is the claim most sources can support; `charge` needs a
+   single rate and nothing else — "$0.48 per kWh + $1 connection" is a price
+   and not a number, and half of it in a tag would be a lower price than
+   anybody pays. Anything mixing "free" with a dollar sign is two statements
+   about two things (the charging and the parking, or Level 2 and DC) and is
+   left for the mapper to read. */
+function parsePrice(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  if (/^free$/i.test(t)) return { fee: "no" };
+  if (/^free; (pay lot|parking fee)$/i.test(t)) return { fee: "no", "parking:fee": "yes" };
+  const one = /^\$\s*(\d*\.?\d+)\s*(?:per|\/)\s*(kwh|min(?:ute)?|hour)\.?$/i.exec(t);
+  if (one) {
+    const unit = { kwh: "kWh", min: "minute", minute: "minute", hour: "hour" }[one[2].toLowerCase()];
+    return { fee: "yes", charge: `${Number(one[1]).toFixed(2)} USD/${unit}` };
+  }
+  if (/free/i.test(t)) return null;
+  if (/\$|pric/i.test(t)) return { fee: "yes" };
+  return null;
+}
+
+/* The day a site opened, as far as the source can be believed.
+   A date dozens of one network's sites share is the day they were loaded
+   (see `bulkDates` in app.js) and is not written. A first of January is how a
+   register stores "sometime that year", so the year is all it supports. */
+function startDate(open, bulk = 0) {
+  const d = String(open || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || bulk) return null;
+  const [y, m, day] = d.split("-").map(Number);
+  if (m < 1 || m > 12 || day < 1 || day > 31) return null;
+  return m === 1 && day === 1 ? String(y) : d;
+}
+
+/* A street address as OSM spells it: number apart from the street, and the
+   street written out. US sources abbreviate and OSM does not, so the common
+   suffixes and compass points are expanded — only those, only at the ends
+   where they are unambiguous, and only when the whole thing is plainly "number,
+   then street". An intersection, a highway exit or a suite is returned as
+   null rather than cut into something address-shaped. */
+const STREET_WORD = {
+  rd: "Road", st: "Street", ave: "Avenue", av: "Avenue", blvd: "Boulevard", dr: "Drive", ln: "Lane",
+  ct: "Court", pl: "Place", pkwy: "Parkway", pky: "Parkway", hwy: "Highway", cir: "Circle", trl: "Trail",
+  ter: "Terrace", sq: "Square", expy: "Expressway", fwy: "Freeway", tpke: "Turnpike", rte: "Route",
+};
+const COMPASS = { n: "North", s: "South", e: "East", w: "West", ne: "Northeast", nw: "Northwest", se: "Southeast", sw: "Southwest" };
+function expandStreet(text) {
+  const t = String(text || "").trim().replace(/\s+/g, " ");
+  const m = /^(\d+[A-Za-z]?)\s+(.+)$/.exec(t);
+  if (!m || /[&@/#,]|\b(exit|at|and|suite|ste|unit|mile|mm)\b/i.test(m[2])) return null;
+  let words = m[2].split(" ").map((w) => w.replace(/\.$/, ""));
+  if (words.length < 2 && !/^[A-Za-z]{4,}$/.test(words[0] || "")) return null;
+  // a source that shouts gets title case; anything already mixed is left alone
+  if (m[2] === m[2].toUpperCase()) words = words.map((w) => /^\d/.test(w) ? w : w[0] + w.slice(1).toLowerCase());
+  const last = words.length - 1;
+  words = words.map((w, i) => {
+    const k = w.toLowerCase();
+    // a compass point leads or trails; in the middle it is part of a name
+    if (COMPASS[k] && (i === 0 || i === last) && words.length > 1) return COMPASS[k];
+    // "St" directly after the number is a saint, not a street
+    if (k === "st" && i === 0) return w;
+    // "US Hwy 19": the one suffix that also sits in the middle
+    if (k === "hwy") return STREET_WORD.hwy;
+    const tail = i === last || (i === last - 1 && COMPASS[words[last].toLowerCase()]);
+    return STREET_WORD[k] && tail && i > 0 ? STREET_WORD[k] : w;
+  });
+  return { housenumber: m[1], street: words.join(" ") };
+}
+
+const CARD_TAG = {
+  V: "payment:visa", M: "payment:mastercard", D: "payment:discover_card", A: "payment:american_express",
+  Debit: "payment:debit_cards", CREDIT: "payment:credit_cards",
+  APPLE_PAY: "payment:apple_pay", ANDROID_PAY: "payment:google_pay", Cash: "payment:cash",
+};
+
+/* Does anything the source says narrow who may use it? Read off the remark
+   after the hours and off AFDC's own access detail. When it does, `access` is
+   not proposed at all: "public, call ahead" and "for guest use only" are not
+   `access=yes`, and which value they are is a judgement the chips below the
+   tags exist for. */
+const NARROWED = /\b(only|permit|guests?|customers?|members?|employees?|residents?|students|staff|call|desk)\b/i;
+const accessNarrowed = (s) => s.accessDetail === "CALL" || NARROWED.test(String(s.hours || "").replace(/open to teslas only|open to all[^.;]*/gi, ""));
+
+function proposeTags(s, why = {}) {
   const t = { amenity: "charging_station" };
+  /* Where each proposed value came from, as [short, long]. The tag list prints
+     the short form beside the value and the long one on hover, so a figure is
+     never just a figure — it is a source's figure, and says whose. */
+  const say = (k, short, long) => { why[k] = [short, long || short]; };
   const net = networkFor(s);
+  const own = sourceMark(s.src);
   /* Once a QID is confirmed it brings its spelling with it: the name and the
      entity have to agree, or the pair says two different things. So the stored
      entry carries both, and is keyed on the name as proposed here — that is the
@@ -1455,7 +1630,11 @@ function proposeTags(s) {
     if (!v) return;
     /* A pair copied from NSI goes on exactly as NSI has it. A spelling this
        browser remembers from an earlier lookup must not drift it away again. */
-    if (nsiQid) { t[k] = v; t[`${k}:wikidata`] = nsiQid; return; }
+    if (nsiQid) {
+      t[k] = v; t[`${k}:wikidata`] = nsiQid;
+      say(k, "NSI", "As the name-suggestion index has it"); say(`${k}:wikidata`, "NSI", "As the name-suggestion index has it");
+      return;
+    }
     /* The brand table wins on `brand:wikidata`. It is curated per company and
        shipped with the board, where `recallWikidata` only knows what this
        browser has confirmed by hand — so the table answers on the first site of
@@ -1465,8 +1644,12 @@ function proposeTags(s) {
     const known = k === "brand" ? brandQid(s.net) : null;
     const hit = WD_KEYS.has(k) ? recallWikidata(v) : null;
     t[k] = hit?.label || v;
+    say(k, own, `The network ${s.src} files this site under`);
     const qid = known || hit?.qid;
-    if (qid) t[`${k}:wikidata`] = qid;
+    if (qid) {
+      t[`${k}:wikidata`] = qid;
+      say(`${k}:wikidata`, known ? "board" : "you", known ? "From the board's brand table" : "Confirmed in this browser earlier");
+    }
   };
   put("brand", net.brand, net.brandQid);
   put("operator", net.operator, net.operatorQid);
@@ -1492,8 +1675,8 @@ function proposeTags(s) {
      No `ref:plugshare`. It is a real tag on 1,423 US elements, but not one of
      the board's four sources publishes a PlugShare id, and a ref nobody can
      check is worse than no ref. */
-  if (s.refs?.length) t["ref:afdc"] = s.refs.join(";");
-  if (s.sc) t["ref:supercharge_info"] = String(s.sc);
+  if (s.refs?.length) { t["ref:afdc"] = s.refs.join(";"); say("ref:afdc", "AFDC", "The AFDC record this site answers"); }
+  if (s.sc) { t["ref:supercharge_info"] = String(s.sc); say("ref:supercharge_info", "SC.info", "The supercharge.info record this site answers"); }
 
   /* No `name`. A charging station is identified by who runs it, not by a name
      of its own, and the names these sources carry are the host business —
@@ -1501,35 +1684,127 @@ function proposeTags(s) {
      NV". Neither is signage on the thing itself. The reported name is still
      shown on the card as context; it just is not a tag. */
 
-  /* Bays, not cables — see `siteBays`. A source's own port count is already a
-     bay count, so it is kept as the DC figure; the Level 2 pedestals AFDC
-     itemises are added to it, because a station holding both holds both and a
-     driver of either can park. Where a site is AFDC's alone the two agree by
-     construction: its `ev_dc_fast_num` is the count of its DC units. */
-  const bays = siteBays(s.units);
-  const capacity = (s.ports > 0 ? s.ports : bays.dc) + bays.ac;
-  if (capacity > 0) t.capacity = String(capacity);
+  /* Ports, cables and power all come off one inventory (`siteInventory` in
+     app.js), so the three cannot disagree with each other or with the
+     dispensers the area card offers to place. Capacity is ports — one car
+     each — and is left off altogether where no source counts them, rather
+     than written as the placeholder 1 it used to be. */
+  const inv = siteInventory(s);
+  const basis = inv.src || own;
+  if (inv.capacity) {
+    t.capacity = String(inv.capacity);
+    say("capacity", sourceMark(inv.claims[0]?.src || basis),
+      inv.claims.length
+        ? inv.claims.map((c) => `${c.src} counts ${nf(c.n)} fast-charging port${c.n === 1 ? "" : "s"}`).join("; ") +
+          (inv.bays.ac ? `; plus ${nf(inv.bays.ac)} Level 2` : "")
+        : `${basis}: ${nf(inv.capacity)} ports`);
+  }
 
-  /* Per-connector counts where the source actually breaks them down. All the
-     Places publishes one feature per charger for EA, IONNA states its mix
-     outright, and supercharge.info counts stalls by plug. AFDC gives a unit
-     breakdown, which is the same thing counted a different way — so it is read
-     first and the override source layered over whichever types it speaks for,
-     leaving AFDC's Level 2 rows in place rather than dropping them with the
-     rest. Only a site neither of them itemises falls back to `yes`. */
-  const counted = Object.entries(s.sockets || {}).filter(([, n]) => Number(n) > 0);
-  const itemised = { ...unitSockets(s.units), ...Object.fromEntries(counted) };
-  if (Object.keys(itemised).length) {
-    for (const [k, n] of Object.entries(itemised)) t[`socket:${k}`] = String(n);
-  } else {
-    let sockets = [...new Set((s.conn || []).map((c) => SOCKET[c]).filter(Boolean))];
-    if (!sockets.length && net.sockets) sockets = net.sockets;
-    for (const k of sockets) {
-      t[`socket:${k}`] = sockets.length === 1 && s.ports > 0 ? String(s.ports) : "yes";
+  /* One count per connector type and, where a source states it, what that
+     connector delivers — its own figure, never the cabinet's best. Where the
+     type is offered at more than one power the fastest is written, which is
+     how nearly every mapped station does it; the split form the wiki also
+     allows ("6;2" with "350 kW;150 kW") is one click away under the tags. */
+  const types = Object.keys(inv.sockets).sort((a, b) => socketRank(a) - socketRank(b));
+  for (const k of types) {
+    const e = inv.sockets[k];
+    t[`socket:${k}`] = e.n != null ? String(e.n) : "yes";
+    say(`socket:${k}`, sourceMark(basis), e.n != null
+      ? `${basis}: ${nf(e.n)} ${socketLabel(k)} cable${e.n === 1 ? "" : "s"}${e.vague ? " (posts carrying one — the cable count is not stated)" : ""}`
+      : `${basis} lists ${socketLabel(k)} without a count`);
+    if (e.max || e.peak) {
+      t[`socket:${k}:output`] = withUnit(e.max || e.peak, "kW");
+      say(`socket:${k}:output`, sourceMark(basis), !e.max
+        ? `${basis}: the fastest stall on a site of mixed hardware — not every stall`
+        : e.powers.length > 1
+          ? `The fastest of ${e.powers.map(([kw, c]) => `${nf(c)} at ${fmtKw(kw)}`).join(", ")}`
+          : `${basis}: every ${socketLabel(k)} cable here`);
     }
   }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s.open || "")) t.start_date = s.open;
+  if (!types.length) {
+    // nothing itemised and nothing listed: the network's usual connector, if it has one
+    const sockets = net.sockets || [];
+    for (const k of sockets) {
+      t[`socket:${k}`] = sockets.length === 1 && inv.capacity ? String(inv.capacity) : "yes";
+      say(`socket:${k}`, "usual", `What ${s.net} sites carry; no source itemises this one`);
+    }
+  }
+  /* DC throughout, so the one technical fact that never needs looking up.
+     Not on a site with Level 2 posts as well: the tag describes the whole
+     station, and half of that one is alternating current. */
+  if (inv.kinds.length && inv.kinds.every((k) => k.dc)) {
+    t.frequency = "0";
+    say("frequency", "DC", "Every port here is direct current");
+  }
+
+  /* Public, as the source lists it — unless the same source goes on to say
+     who it is really for, in which case the question is left open. A site that
+     looks like a dealership is left open too; the chips under the tags answer
+     it in one click either way. */
+  if (!accessNarrowed(s) && !looksLikeDealer(s)) {
+    t.access = "yes";
+    say("access", own, `${s.src} lists this as open to the public`);
+  }
+
+  const hours = s.hoursOsm ? (HOURS_OK.test(s.hours || "") ? s.hours : null) : parseHours(s.hours);
+  if (hours) { t.opening_hours = hours; say("opening_hours", s.hoursOsm ? own : "AFDC", `${s.hoursOsm ? s.src : "AFDC"}: "${s.hours}"`); }
+
+  const price = parsePrice(s.price);
+  if (price) for (const [k, v] of Object.entries(price)) { t[k] = v; say(k, "AFDC", `AFDC: "${s.price}"`); }
+  // an operator that states these outright (IONNA does) is taken at its word
+  if (/^(yes|no)$/.test(s.fee || "")) { t.fee = s.fee; say("fee", own, `${s.src} states it`); }
+  if (/^(yes|no)$/.test(s.pfee || "")) { t["parking:fee"] = s.pfee; say("parking:fee", own, `${s.src} states it`); }
+
+  // the operator's page for this one site — not its home page, which says nothing
+  if (/^https?:\/\/\S+$/.test(s.web || "")) { t.website = s.web; say("website", own, "The operator's own page for this site"); }
+
+  const opened = startDate(s.open, s.openBulk);
+  if (opened) { t.start_date = opened; say("start_date", s.openSrc || own, `${s.openSrc || s.src} open date${opened.length === 4 ? " — a 1 January, so only the year is taken" : ""}`); }
   return t;
+}
+
+/* More that the sources know, which is true of the site and not obviously the
+   charging station's to carry. Each is one click to add and one to take back,
+   and nothing here is on by default: an address belongs to the building as
+   much as to the chargers, and a list of cards is the kind of detail that goes
+   stale. They are offered because typing them is the slow part. */
+function offers(s) {
+  const out = [];
+  const own = sourceMark(s.src);
+  const a = expandStreet(s.street);
+  const zip = /^\d{5}(-\d{4})?$/.test(String(s.zip || "")) ? String(s.zip) : null;
+  const addr = {
+    ...(a ? { "addr:housenumber": a.housenumber, "addr:street": a.street } : {}),
+    ...(s.city ? { "addr:city": s.city } : {}),
+    ...(/^[A-Z]{2}$/.test(s.state || "") ? { "addr:state": s.state } : {}),
+    ...(zip ? { "addr:postcode": zip } : {}),
+  };
+  if (a || zip) out.push({ id: "addr", label: "Address", tags: addr, src: s.street && s.src !== "AFDC" ? own : "AFDC",
+    hint: `${s.street || ""}${s.city ? `, ${s.city}` : ""}${zip ? ` ${zip}` : ""} — check the street is spelled as signed` });
+
+  const cards = Object.fromEntries(String(s.cards || "").split(/\s+/)
+    .map((c) => CARD_TAG[c]).filter(Boolean).map((k) => [k, "yes"]));
+  if (Object.keys(cards).length) out.push({ id: "pay", label: "Cards accepted", tags: cards, src: "AFDC",
+    hint: `AFDC: ${Object.keys(cards).map((k) => k.slice(8).replace(/_/g, " ")).join(", ")}` });
+
+  if (s.cls === "HD") out.push({ id: "hgv", label: "Heavy trucks", tags: { hgv: "yes" }, src: "AFDC",
+    hint: "AFDC lists this site as taking heavy-duty vehicles" });
+
+  /* The split form, for a site whose cables of one type run at different
+     powers. It replaces the single count and output rather than adding to
+     them, so taking it back has to put those two back as they were. */
+  const inv = siteInventory(s);
+  const splitTags = {}, whole = {};
+  for (const [k, e] of Object.entries(inv.sockets)) {
+    if (e.powers.length < 2 || e.unknown) continue;
+    splitTags[`socket:${k}`] = e.powers.map(([, c]) => c).join(";");
+    splitTags[`socket:${k}:output`] = e.powers.map(([kw]) => withUnit(kw, "kW")).join(";");
+    whole[`socket:${k}`] = String(e.n);
+    whole[`socket:${k}:output`] = withUnit(e.max, "kW");
+  }
+  if (Object.keys(splitTags).length) out.push({ id: "split", label: "Split by power", tags: splitTags, restore: whole, src: sourceMark(inv.src),
+    hint: "Writes each power with its own count instead of the fastest alone" });
+  return out;
 }
 
 /* ------------------------------------------------------- upgrading a node
@@ -1543,13 +1818,17 @@ function proposeTags(s) {
    This queue is the other half of the board's job. The first mode asks "is this
    site on the map at all"; this one asks "is what is on the map as good as what
    we know". It only ever offers sites that are already mapped, as a bare node,
-   where AFDC has told us how many units stand there.
+   where some source says what stands there — AFDC's unit list, supercharge.info's
+   stalls, an operator's own posts.
 
-   What it cannot do is place them for you. AFDC publishes a unit breakdown for
-   every site — how many pedestals, each one's connectors and power — but no
-   coordinates for any of it, so the counts come from the data and the positions
-   come from your eyes on the imagery. That division is the whole design: the
-   panel says what should be there, you say where. */
+   What it cannot do is place them for you. The sources say how many ports a
+   site has, which cables each carries and what they deliver, and none of them
+   says where any of it stands — so the counts come from the data and the
+   positions come from your eyes on the imagery. That division is the whole
+   design: the panel says what should be there, you say where. And where the
+   sources disagree with each other, or with what is already tagged, the panel
+   says that too and leaves the choice with the one party who can see the
+   forecourt. */
 
 /* `CONN_SOCKET` and `DC_SOCKET` live in app.js: the board exports sockets too,
    and one vocabulary that both files read beats two that can drift apart. */
@@ -1578,29 +1857,16 @@ function normaliseUnits(tags) {
   return out;
 }
 
-// how many sockets one AFDC unit carries
-const kindSockets = (kind) =>
-  Object.entries(kind.conn || {}).reduce((a, [k, n]) => a + (CONN_SOCKET[k] ? n : 0), 0);
-
-/* What the site holds, in OSM's vocabulary: every socket AFDC accounts for, and
-   the powers each connector is offered at.
-
-   AFDC publishes totals, and totals do not say how the hardware is arranged.
-   Four CCS sockets is two twin-cable cabinets or four singles — or four
-   cabinets each pairing CCS with NACS — and nothing in the feed distinguishes
-   them. Only somebody looking at the site can. So this works out what must be
-   accounted for, and the placing is left to say how it is grouped. */
-function siteSockets(units) {
-  const total = unitSockets(units);
-  const powers = {};
-  for (const u of units || []) {
-    for (const k of Object.keys(u.conn || {})) {
-      const key = CONN_SOCKET[k];
-      if (key && u.kw) (powers[key] ||= new Set()).add(u.kw);
-    }
+/* What has to be accounted for when placing, read off the site's inventory:
+   every cable by connector type, and the powers each type is offered at. */
+function siteSockets(inv) {
+  const total = {}, powers = {};
+  for (const [k, e] of Object.entries(inv.sockets)) {
+    if (e.n == null) continue;
+    total[k] = e.n;
+    if (e.powers.length) powers[k] = e.powers.map(([kw]) => kw);
   }
-  return { total, powers: Object.fromEntries(
-    Object.entries(powers).map(([k, v]) => [k, [...v].sort((a, b) => b - a)])) };
+  return { total, powers };
 }
 
 // sockets already accounted for by the points on the map and the ones just placed
@@ -1618,40 +1884,61 @@ function socketsDone(placed, existing) {
   return out;
 }
 
-/* A starting configuration: one of whichever connector the site has most of, at
-   its highest power. The commonest cabinet is a single cable, so that is the
-   guess that needs the least correcting.
+/* What one click places: a dispenser.
 
-   DC first where the site has any. Sorting the whole list by count let Level 2
-   win on the 796 mixed sites where the posts outnumber the cabinets, so the
-   first dispenser offered on a DC board was a type 1 lead — and at Denver
-   International, a household socket. The fast hardware is what brought the site
-   into the queue, so it is what the mapper is sent to place first; the Level 2
-   rows are still listed and still have to be accounted for. */
-function defaultCfg(units) {
-  const { total, powers } = siteSockets(units);
-  const rank = Object.entries(total)
-    .sort((a, b) => (DC_SOCKET.has(b[0]) - DC_SOCKET.has(a[0])) || b[1] - a[1]);
-  const first = rank[0];
-  if (!first) return { conn: {}, kw: {} };
-  return { conn: { [first[0]]: 1 }, kw: { [first[0]]: powers[first[0]]?.[0] ?? null } };
+   The sources describe ports — one car each — and a port is usually a
+   dispenser, but not always: an Alpitronic or a ChargePoint Express cabinet
+   often serves two bays, and then two of the source's ports are one box on the
+   ground. So a configuration is a kind of port times how many of them share
+   the cabinet (`ports`), and that multiplier is the one thing the imagery
+   decides. Everything else — which cables, what each delivers, the current
+   and voltage where the operator publishes them — comes from the kind, so
+   placing a site is choosing a kind and clicking, not filling in a form.
+
+   `kind` is null for a configuration built by hand on the steppers. */
+function kindCfg(kind, ports = 1) {
+  const times = (o) => Object.fromEntries(Object.entries(o || {}).map(([t, c]) => [t, c * ports]));
+  return {
+    conn: times(kind.conn), kw: { ...(kind.kw || {}) },
+    ...(kind.amp ? { amp: { ...kind.amp } } : {}),
+    ...(kind.volt ? { volt: { ...kind.volt } } : {}),
+    bays: ports, kind: kindKey(kind),
+  };
+}
+
+/* Where a site starts: its first kind, which the inventory orders DC first
+   and strongest first — the fast hardware is what brought the site into the
+   queue, so it is what the mapper is sent to place first. A site with totals
+   and no kinds starts on a single cable of its commonest DC connector. */
+function defaultCfg(inv) {
+  if (inv.kinds.length) return kindCfg(inv.kinds[0]);
+  const { total, powers } = siteSockets(inv);
+  const first = Object.entries(total)
+    .sort((a, b) => (DC_SOCKET.has(b[0]) - DC_SOCKET.has(a[0])) || b[1] - a[1])[0];
+  if (!first) return { conn: {}, kw: {}, kind: null };
+  return { conn: { [first[0]]: 1 }, kw: { [first[0]]: powers[first[0]]?.[0] ?? null }, kind: null };
 }
 
 const cfgSockets = (cfg) => Object.values(cfg.conn).reduce((a, n) => a + n, 0);
+/* How many cars a cabinet charges at once. Stated, where the configuration
+   came from a kind. Worked out, where it was built by hand: two connector
+   types side by side are alternatives — a driver takes the CCS or the CHAdeMO,
+   never both — so the largest single-type count is the best reading of the
+   cables alone. It is a reading, not a fact (two CCS cables on one Electrify
+   America post charge one car), which is why the panel shows the figure and
+   lets it be changed. */
+const cfgBays = (cfg) => cfg.bays || Math.max(0, ...Object.values(cfg.conn || {}).map((n) => n || 0));
 /* Power is per connector, not per cabinet. A pedestal offering CCS at 120 kW
    and a type 1 lead at 6.6 kW is one cabinet with two very different cables,
    and one number for both would be wrong about at least one of them. */
 const cfgLabel = (cfg) => {
   const bits = Object.entries(cfg.conn).filter(([, n]) => n)
-    .map(([k, n]) => `${n}× ${k}${cfg.kw?.[k] ? ` @ ${cfg.kw[k]} kW` : ""}`);
+    .sort((a, b) => socketRank(a[0]) - socketRank(b[0]))
+    .map(([k, n]) => `${n > 1 ? `${n}× ` : ""}${socketLabel(k)}${cfg.kw?.[k] ? ` ${fmtKw(cfg.kw[k])}` : ""}`);
   return bits.length ? bits.join(" + ") : "nothing selected";
 };
 
-/* Tags for one dispenser — the cabinet somebody walks up to, which is not the
-   same thing as a socket. AFDC counts sockets and calls them units, so a site
-   with six twin-cable dispensers arrives here as "12 units"; `per` is how many
-   of those sockets are on one cabinet, and it is the mapper's to set, because
-   only they have stood in the car park.
+/* Tags for one dispenser — the cabinet somebody walks up to.
 
    Power hangs off the socket, not the station. `charging_station:output`
    describes a site as a whole, so on a node that is one dispenser it is the
@@ -1659,31 +1946,23 @@ const cfgLabel = (cfg) => {
    delivers this much. */
 function pointTags(cfg, gear = null, from = null) {
   const t = { man_made: "charge_point" };
-  let dc = false;
-  for (const [key, n] of Object.entries(cfg.conn || {})) {
-    if (!n) continue;
+  const types = Object.entries(cfg.conn || {}).filter(([, n]) => n);
+  for (const [key, n] of types) {
     t[`socket:${key}`] = String(n);
     if (cfg.kw?.[key]) t[`socket:${key}:output`] = withUnit(cfg.kw[key], "kW");
-    // AFDC has neither of these; they come off the remembered profile for this
-    // cabinet, because a model number pins them down and a site never will
-    const amps = withUnit(gear?.current, "A");
-    const volts = withUnit(gear?.voltage, "V");
+    /* Current and voltage: the operator's own figure for this connector where
+       it publishes one, otherwise the remembered profile for this cabinet —
+       and that only on a DC connector. A cabinet's rated 500 A is its DC
+       cable's; stamping it on the type 1 lead beside it was simply wrong. */
+    const amps = withUnit(cfg.amp?.[key] ?? (DC_SOCKET.has(key) ? gear?.current : null), "A");
+    const volts = withUnit(cfg.volt?.[key] ?? (DC_SOCKET.has(key) ? gear?.voltage : null), "V");
     if (amps) t[`socket:${key}:current`] = amps;
     if (volts) t[`socket:${key}:voltage`] = volts;
-    if (DC_SOCKET.has(key)) dc = true;
   }
-  /* How many cars this cabinet serves at once, which is not how many cables
-     hang off it. Two connector types side by side are alternatives — a driver
-     takes the CCS or the CHAdeMO, never both — so a twin-head dispenser is one
-     bay. Two of the same type are two bays, because nothing stops a second car
-     using the second cable. The largest single-type count is therefore the
-     answer: 1× CCS + 1× NACS is one, 2× CCS is two, and 2× CCS + 2× CHAdeMO is
-     a cabinet of two twin-head bays. */
-  const bays = Math.max(0, ...Object.values(cfg.conn || {}).map((n) => n || 0));
-  t.capacity = String(bays);
-  // DC is mains frequency zero — the one technical fact about a fast charger
-  // that never needs looking up
-  if (dc) t.frequency = "0";
+  const bays = cfgBays(cfg);
+  if (bays) t.capacity = String(bays);
+  // DC is mains frequency zero — but only a cabinet with nothing else on it
+  if (types.length && types.every(([key]) => DC_SOCKET.has(key))) t.frequency = "0";
   return { ...t, ...gearTags(gear), ...inherited(from) };
 }
 
@@ -1780,44 +2059,59 @@ function gearSummary(g) {
   return bits.join(" · ");
 }
 
-/* What the station itself should say: every socket on the site added up, and a
-   capacity to match. The old path copied the node's tags to the way untouched,
-   which left a site claiming whatever single number was on the node while the
-   points beneath it said something else.
+/* What the station itself should say, from the same inventory the proposals
+   and the dispensers are read off: every cable on the site by connector type,
+   what each type delivers, and a capacity in ports.
 
-   Counted from AFDC's units rather than from the points just placed, because
+   Counted from the inventory rather than from the points just placed, because
    the two are not the same thing. Somebody who maps six of a site's ten
    cabinets today has not made the site smaller, and a station that shrinks to
    match how far its mapper got is worse than one that states the site. */
-function stationTags(base, units) {
-  const t = normaliseUnits(base);
-  const totals = unitSockets(units);
-  const kw = {};
-  let dc = false;
-  for (const u of units) {
-    for (const [k, n] of Object.entries(u.conn || {})) {
-      const key = CONN_SOCKET[k];
-      if (!key) continue;
-      // the strongest of a kind, which is what a site is judged on
-      if (u.kw && u.kw > (kw[key] || 0)) kw[key] = u.kw;
-      if (DC_SOCKET.has(key)) dc = true;
-    }
+function stationFacts(inv, split = false) {
+  const t = {};
+  for (const [key, e] of Object.entries(inv.sockets)) {
+    if (e.n == null) continue;
+    const parted = split && e.powers.length > 1 && !e.unknown;
+    t[`socket:${key}`] = parted ? e.powers.map(([, c]) => c).join(";") : String(e.n);
+    if (e.max || e.peak) t[`socket:${key}:output`] = parted
+      ? e.powers.map(([kw]) => withUnit(kw, "kW")).join(";") : withUnit(e.max || e.peak, "kW");
   }
-  for (const [key, n] of Object.entries(totals)) {
-    t[`socket:${key}`] = String(n);
-    if (kw[key]) t[`socket:${key}:output`] = withUnit(kw[key], "kW");
-  }
-  /* Bays, not cables — see `siteBays`. Summing the sockets counted a twin-head
-     dispenser as two cars and a site of them as twice its real capacity, and
-     Level 2 pedestals rode in on the same total, so a site with seven DC
-     cabinets behind fifty-six posts claimed a capacity of seventy.
+  if (inv.capacity) t.capacity = String(inv.capacity);
+  if (inv.kinds.length && inv.kinds.every((k) => k.dc)) t.frequency = "0";
+  return t;
+}
 
-     Both halves still count: a station that holds Level 2 and DC holds both,
-     and a driver of either can park. What changed is that each pedestal is
-     worth one car rather than one cable. */
-  const bays = siteBays(units);
-  if (bays.total) t.capacity = String(bays.total);
-  if (dc) t.frequency = "0";
+/* Where what is already tagged says something different from the sources.
+
+   A value on the map was put there by somebody. It may be a survey — a mapper
+   who stood in the car park and counted — or it may be a default nobody
+   revisited, and nothing in the tag says which. So the sources fill what is
+   empty and replace what only says "yes"; a real value that disagrees is left
+   standing and listed, and the mapper, who can see the imagery, ticks the ones
+   the sources have right. `soft` marks a row that is replaced without asking. */
+const softValue = (had) => had === "yes";
+function stationConflicts(existing, inv) {
+  const rows = [];
+  for (const [key, want] of Object.entries(stationFacts(inv))) {
+    const had = existing?.[key];
+    if (had == null || had === "") continue;
+    const same = /:output$/.test(key)
+      ? parseFloat(had) === parseFloat(want) && !/;/.test(had)
+      : String(had) === want;
+    if (!same) rows.push({ key, had: String(had), want, soft: softValue(had) });
+  }
+  return rows;
+}
+
+/* `overwrite` is the set of keys the mapper ticked. Left out, only the soft
+   rows are replaced — which is what happens when the element could not be
+   read ahead of saving and there was nothing to tick. */
+function stationTags(base, inv, { overwrite = null, split = false } = {}) {
+  const t = normaliseUnits(base);
+  for (const [k, v] of Object.entries(stationFacts(inv, split))) {
+    const had = t[k];
+    if (had == null || had === "" || softValue(had) || overwrite?.has(k)) t[k] = v;
+  }
   return t;
 }
 
@@ -1840,10 +2134,16 @@ function upgradePool() {
   const done = rememberKeys(K.upDone);
   const skip = rememberKeys(K.upSkip);
   return MERGED.sites
-    .filter((s) => s.osm && !s.hostOnly && s.osmId?.[0] === "n" && s.units?.length)
+    .filter((s) => s.osm && !s.hostOnly && s.osmId?.[0] === "n" && canItemise(s))
     .filter((s) => !VIEW.net || s.net === VIEW.net)
     .filter((s) => !isRemembered(done, s) && !isRemembered(skip, s));
 }
+
+/* Is there anything to place? The queue used to ask whether AFDC had a unit
+   breakdown, which left out every Supercharger and IONNA site AFDC does not
+   list — sites whose own source says exactly how many stalls there are and
+   what each carries. Any inventory with kinds will do. */
+const canItemise = (s) => siteInventory(s).kinds.length > 0;
 
 function upgrades() {
   return upgradePool()
@@ -1853,7 +2153,7 @@ function upgrades() {
     .sort((a, b) => unitCount(b) - unitCount(a));
 }
 
-const unitCount = (s) => (s.units || []).reduce((a, u) => a + u.n, 0);
+const unitCount = (s) => siteInventory(s).capacity || 0;
 
 /* Clicks land on the map while a tool is up: corners for the outline, one per
    pedestal for the charge points. Returning true tells the map this click was
@@ -1864,10 +2164,33 @@ function upgradeClick(ll) {
   if (u.tool === "outline") u.ring.push(ll);
   // the configuration is copied, not referenced: changing it for the next
   // cabinet must not rewrite the one just placed
-  else u.pts.push({ ...ll, cfg: { conn: { ...u.cfg.conn }, kw: { ...u.cfg.kw } } });
+  else {
+    u.pts.push({ ...ll, cfg: JSON.parse(JSON.stringify(u.cfg)) });
+    nextKind(u);
+  }
   paintSide();
   MAP.schedule();
   return true;
+}
+
+/* How many ports of each kind have been placed, by the kind's key. */
+function placedByKind(u) {
+  const out = {};
+  for (const p of u.pts) if (p.cfg.kind) out[p.cfg.kind] = (out[p.cfg.kind] || 0) + cfgBays(p.cfg);
+  return out;
+}
+
+/* When the kind being placed is used up, move to the next one that is not.
+   A site of eight 350 kW posts and two 150 kW ones is then ten clicks and no
+   trips to the panel. It only ever moves forward off a finished kind: a kind
+   chosen by hand, or placed past its count on purpose, is left alone. */
+function nextKind(u) {
+  const inv = siteInventory(CUR.site);
+  const done = placedByKind(u);
+  const at = inv.kinds.findIndex((k) => kindKey(k) === u.cfg.kind);
+  if (at < 0 || (done[u.cfg.kind] || 0) < inv.kinds[at].n) return;
+  const next = inv.kinds.find((k) => (done[kindKey(k)] || 0) < k.n);
+  if (next) u.cfg = kindCfg(next, Math.min(u.per || 1, next.n - (done[kindKey(next)] || 0)));
 }
 
 /* The ring as it will be uploaded. Three clicks make a rectangle — the fourth
@@ -1884,8 +2207,8 @@ function drawUpgrade(ctx, map) {
     ctx.beginPath();
     ring.forEach((p, i) => { const [x, y] = map.toPx(p.lat, p.lon); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
     if (ring.length > 2) ctx.closePath();
-    ctx.fillStyle = "rgba(168,81,42,.18)";
-    ctx.strokeStyle = cssv("--accent");
+    ctx.fillStyle = "rgba(255,122,26,.2)";
+    ctx.strokeStyle = cssv("--pin");
     ctx.lineWidth = 2;
     if (ring.length > 2) ctx.fill();
     ctx.stroke();
@@ -1893,16 +2216,16 @@ function drawUpgrade(ctx, map) {
     for (const p of u.ring) {
       const [x, y] = map.toPx(p.lat, p.lon);
       ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 6.284);
-      ctx.fillStyle = cssv("--accent"); ctx.fill();
+      ctx.fillStyle = cssv("--pin"); ctx.fill();
     }
   }
   u.pts.forEach((p, i) => {
     const [x, y] = map.toPx(p.lat, p.lon);
     ctx.beginPath(); ctx.arc(x, y, 8, 0, 6.284);
     ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fill();
-    ctx.strokeStyle = cssv("--s1"); ctx.lineWidth = 2.2; ctx.stroke();
-    ctx.fillStyle = cssv("--s1");
-    ctx.font = "600 10px 'IBM Plex Mono', monospace";
+    ctx.strokeStyle = cssv("--pin-info"); ctx.lineWidth = 2.2; ctx.stroke();
+    ctx.fillStyle = cssv("--pin-info");
+    ctx.font = "600 10px 'Overpass Mono', monospace";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(String(i + 1), x, y);
   });
@@ -1914,17 +2237,17 @@ function drawUpgrade(ctx, map) {
     const grabbable = o.kind === "point" && o.type === "node";
     if (o.moved) {
       const h = map.toPx(o.home.lat, o.home.lon);
-      ctx.strokeStyle = cssv("--s4");
+      ctx.strokeStyle = cssv("--pin-warn");
       ctx.setLineDash([4, 4]); ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.moveTo(h[0], h[1]); ctx.lineTo(x, y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.beginPath(); ctx.arc(h[0], h[1], 3.5, 0, 6.284); ctx.stroke();
     }
-    ctx.strokeStyle = cssv(o.moved ? "--accent" : "--s3");
+    ctx.strokeStyle = cssv(o.moved ? "--pin" : "--pin-ok");
     ctx.lineWidth = 2.4;
     ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.284); ctx.stroke();
     if (grabbable) {
-      ctx.fillStyle = cssv(o.moved ? "--accent" : "--s3");
+      ctx.fillStyle = cssv(o.moved ? "--pin" : "--pin-ok");
       ctx.beginPath(); ctx.arc(x, y, 2.2, 0, 6.284); ctx.fill();
     }
   }
@@ -1955,14 +2278,94 @@ function bindShapeSwitch(side) {
   });
 }
 
+/* What each source says about this site, side by side.
+
+   The tag list shows what is proposed; this shows what it was proposed from,
+   including the parts that were not turned into a tag — hours the source gave
+   in words, a price with a connection fee on top, a line about which corner of
+   the car park to look in. Where two sources count the ports differently both
+   numbers are here, because the mapper is the only one of the three who can
+   see the forecourt. */
+const FAC_WORDS = (f) => String(f || "").toLowerCase().replace(/_/g, " ");
+function evidenceCard(s) {
+  const inv = siteInventory(s);
+  const rows = [];
+  const row = (k, v, cls = "") => rows.push(`<dt>${k}</dt><dd${cls ? ` class="${cls}"` : ""}>${v}</dd>`);
+  if (inv.claims.length) {
+    row("Ports", inv.claims.map((c) => `${esc(sourceMark(c.src))} <b>${nf(c.n)}</b>`).join(" · ") +
+      (inv.bays.ac ? ` · +${nf(inv.bays.ac)} Level 2` : ""), inv.agree ? "" : "is-off");
+  }
+  if (inv.kinds.length) {
+    row("Hardware", inv.kinds.map((k) =>
+      `${nf(k.n)} × ${esc(kindLabel(k))}${k.src && k.src !== inv.src ? ` <span class="tag-src">${esc(sourceMark(k.src))}</span>` : ""}`).join("<br>"));
+  }
+  const gens = Object.entries(s.stalls || {}).filter(([, n]) => n > 0);
+  if (gens.length) {
+    row("Stalls", gens.map(([k, n]) => `${nf(n)} ${esc(/^v\d$/.test(k) ? k.toUpperCase() : k.replace(/([A-Z])/g, " $1").toLowerCase())}`).join(" · "));
+  }
+  if (s.other === false) row("Open to", "Tesla vehicles only");
+  if (s.hours) row("Hours", `“${esc(s.hours)}”${parseHours(s.hours) || s.hoursOsm ? "" : ` <span class="imp-unused">not a tag</span>`}`);
+  if (s.price) row("Price", `“${esc(s.price)}”${parsePrice(s.price)?.charge || /^free/i.test(s.price) ? "" : ` <span class="imp-unused">${parsePrice(s.price) ? "fee only" : "not a tag"}</span>`}`);
+  if (s.host) row("Host", esc(s.host));
+  else if (s.fac) row("Facility", esc(FAC_WORDS(s.fac)));
+  if (s.dir) row("Where", `“${esc(s.dir)}”`);
+  if (s.street) row("Address", esc([s.street, s.city, s.state].filter(Boolean).join(", ")));
+  if (s.geo) row("Position", "Geocoded from the street address, not surveyed — expect the pin to be off", "is-off");
+  if (s.open) row("Opened", `${esc(s.open)}${s.openBulk
+    ? ` <span class="imp-unused">shared by ${nf(s.openBulk)} ${esc(s.net)} sites — a batch date, not written</span>` : ""}`);
+  if (s.conf) row("Confirmed", `${esc(s.conf)} by AFDC`);
+  if (!rows.length && !inv.flags.length) return "";
+  return `
+    <details class="imp-src"${inv.agree && !s.geo ? "" : " open"} id="imp-src">
+      <summary><span class="imp-h">What the sources say</span>${
+        inv.agree ? "" : `<span class="chip" style="color:var(--warn)">they differ</span>`}</summary>
+      ${rows.length ? `<dl class="imp-facts imp-facts--src">${rows.join("")}</dl>` : ""}
+      ${inv.flags.map((f) => `<p class="imp-note imp-flag${f.level === "warn" ? " is-warn" : ""}">${esc(f.text)}</p>`).join("")}
+    </details>`;
+}
+/* The headline count, and how much of it is fast charging when not all of it
+   is — a site of three DC cabinets and six Level 2 posts is "9" as a capacity
+   and "3" as the reason it is on this board. */
+const portsLine = (inv) => !inv.capacity ? "not counted"
+  : inv.bays.ac && inv.bays.dc ? `${nf(inv.capacity)} · ${nf(inv.bays.dc)} fast, ${nf(inv.bays.ac)} Level 2`
+  : nf(inv.capacity);
+
+// remembered across repaints and across sites: someone who wants it open wants it open
+const bindEvidence = (side) => {
+  const d = side.querySelector("#imp-src");
+  if (!d) return;
+  if (CUR.srcOpen != null) d.open = CUR.srcOpen || d.hasAttribute("open");
+  d.addEventListener("toggle", () => { CUR.srcOpen = d.open; });
+};
+
+/* A Supercharger's hardware, where supercharge.info names one generation for
+   the whole site. Offered as a chip, not filled in: it is the feed's word for
+   what the posts are, and the mapper may be looking at something else. */
+function suggestedGear(s) {
+  if (!/supercharge/i.test(s.src || "")) return null;
+  const gens = Object.entries(s.stalls || {}).filter(([k, n]) => /^(v\d|urban)$/.test(k) && n > 0);
+  if (gens.length !== 1) return null;
+  const g = gens[0][0];
+  return { manufacturer: "Tesla", mfgQ: "Q478214", model: g === "urban" ? "Urban Supercharger" : `Supercharger ${g.toUpperCase()}` };
+}
+
 function upgradeCard(side) {
   const s = CUR.site, u = CUR.up;
+  const inv = siteInventory(s);
   const ring = upgradeRing(u);
   const placed = u.pts.length;
   const already = (MAP.others || []).filter((o) => o.kind === "point");
   const nudged = already.filter((o) => o.moved);
-  const { total, powers } = siteSockets(s.units);
+  const { total, powers } = siteSockets(inv);
   const done = socketsDone(u.pts, already);
+  const doneKinds = placedByKind(u);
+  const hint = suggestedGear(s);
+  /* What is tagged on the map now, where the element is close enough to have
+     been read with the surroundings, and where it differs from the sources. */
+  const onMap = s.osmId
+    ? (MAP.others || []).find((o) => o.kind === "station" && `${o.type[0]}${o.id}` === s.osmId) : null;
+  const conflicts = onMap ? stationConflicts(onMap.tags, inv).filter((r) => !r.soft) : [];
+  if (conflicts.length && !u.over) u.over = new Set();
   // what is still unaccounted for, connector by connector
   const left = Object.fromEntries(Object.entries(total)
     .map(([k, n]) => [k, n - (done[k] || 0)]).filter(([, n]) => n !== 0));
@@ -1980,7 +2383,7 @@ function upgradeCard(side) {
       <h3>${esc(s.name || "Unnamed site")}</h3>
       <div class="imp-net">${brandMark(s.net)}${esc(s.net)}</div>
       <dl class="imp-facts">
-        <dt>Ports</dt><dd>${nf(s.ports)}</dd>
+        <dt>Ports</dt><dd>${portsLine(inv)}</dd>
         <dt>On the map</dt><dd class="mono">${s.osmId
           ? `${esc(s.osmId)}${s.osmCap != null ? ` · capacity ${nf(s.osmCap)}` : " · no capacity"}`
           : "nothing yet"}</dd>
@@ -1988,67 +2391,100 @@ function upgradeCard(side) {
       </dl>
     </div>
 
+    ${evidenceCard(s)}
+
+    ${conflicts.length ? `
+      <div class="imp-warn">
+        <b>The map and the sources differ</b>
+        <p class="imp-note">What is tagged now is kept unless you tick it. Somebody may have counted
+           these on the ground — tick only what the imagery bears out.</p>
+        <div class="imp-tags">
+          ${conflicts.map((r) => `
+            <label class="tagrow diffrow is-change">
+              <input type="checkbox" data-over="${esc(r.key)}"${u.over.has(r.key) ? " checked" : ""}>
+              <span class="tag-k mono">${esc(r.key)}</span>
+              <span class="tag-v">map <b>${esc(r.had)}</b> · sources <b>${esc(r.want)}</b></span>
+              <span class="kind">use</span>
+            </label>`).join("")}
+        </div>
+      </div>` : ""}
+
     <div class="imp-poi">
-      <b>AFDC accounts for</b>
+      <b>What stands here${inv.src ? ` · ${esc(sourceMark(inv.src))}` : ""}</b>
+      ${inv.kinds.length ? `
+        <div class="imp-kinds">
+          ${inv.kinds.map((k, i) => {
+            const key = kindKey(k), got = doneKinds[key] || 0;
+            const twin = Object.values(k.conn).some((c) => c > 1);
+            return `<button class="imp-kind${u.cfg.kind === key ? " is-on" : ""}${
+                got === k.n ? " is-done" : got > k.n ? " is-over" : ""}" data-kind="${i}"
+                aria-pressed="${u.cfg.kind === key}" title="Place this kind">
+              <span class="imp-kind-n mono">${nf(k.n)} ×</span>
+              <span class="imp-kind-what">${esc(kindLabel(k))}${twin ? `<em>one car at a time</em>` : ""}${
+                k.vague ? `<em>cable count not stated</em>` : ""}</span>
+              <span class="imp-kind-got mono">${nf(got)} / ${nf(k.n)}</span>
+            </button>`;
+          }).join("")}
+        </div>
+        <p class="imp-note">Each row is ${nf(1)} port — one car charging. Pick a row, then click each
+           one on the imagery; the next row is selected when a row is used up.</p>`
+      : `<p class="imp-note">No source itemises the dispensers here, only totals. Build one cabinet
+           below and place what the imagery shows.</p>`}
+
       <div class="imp-balance">
         ${Object.entries(total).map(([key, n]) => {
           const gone = done[key] || 0;
           return `<div class="imp-balance-row${gone === n ? " is-done" : gone > n ? " is-over" : ""}">
-            <span class="mono">${esc(key)}</span>
+            <span>${esc(socketLabel(key))} <span class="mono">${esc(key)}</span></span>
             <span class="mono">${nf(gone)} / ${nf(n)}${
               powers[key]?.length > 1 ? ` · ${powers[key].join("/")} kW` : ""}</span>
           </div>`;
         }).join("")}
       </div>
-      ${(() => {
-        /* Two sources counting the same forecourt. AFDC publishes a unit
-           breakdown; All the Places and supercharge.info publish a stall count
-           and are the reason those networks are overridden at all. Where the
-           two disagree the panel says so rather than picking one — the mapper
-           is the one who can see which is right, and neither number is worth
-           hiding to keep the arithmetic tidy.
-
-           Bays against ports, not cables against ports. A stall count and a
-           cable count differ on every twin-head site by definition, so
-           comparing those two cried disagreement on forecourts where the
-           sources agree perfectly well. */
-        const bays = siteBays(s.units).dc;
-        if (!s.ports || !bays || bays === s.ports || s.src === "AFDC") return "";
-        return `<p class="imp-note imp-known">${esc(s.src)} counts ${nf(s.ports)} ports here;
-           AFDC itemises ${nf(bays)}. The connectors below are AFDC's, the
-           port count is ${esc(s.src)}'s. Place what the imagery actually shows.</p>`;
-      })()}
       <p class="imp-note">${balanced ? `Every socket accounted for.`
         : `Still to place: ${esc(Object.entries(left).map(([k, n]) =>
-             n > 0 ? `${nf(n)} ${k}` : `${nf(-n)} ${k} too many`).join(", "))}.`}${
+             n > 0 ? `${nf(n)} ${socketLabel(k)}` : `${nf(-n)} ${socketLabel(k)} too many`).join(", "))}.`}${
         already.length ? ` ${nf(already.length)} already mapped, counted in. Drag a ring onto its
         actual bay.` : ""}</p>
 
       <div class="imp-cfg">
-        <div class="ctl-label">This dispenser carries</div>
-        ${Object.keys(total).map((key) => `
-          <div class="imp-cfg-row">
-            <span class="mono">${esc(key)}</span>
-            <span class="imp-step">
-              <button class="imp-chip" data-conn="${esc(key)}" data-step="-1"${
-                (u.cfg.conn[key] || 0) ? "" : " disabled"}>−</button>
-              <b class="mono">${nf(u.cfg.conn[key] || 0)}</b>
-              <button class="imp-chip" data-conn="${esc(key)}" data-step="1">+</button>
-            </span>
+        <div class="ctl-label">This cabinet</div>
+        <div class="imp-cfg-row">
+          <span class="imp-cfg-what">${esc(cfgLabel(u.cfg))}</span>
+        </div>
+        <div class="imp-cfg-row">
+          <span title="A cabinet serving two bays is two of the source's ports on one box">Cars it charges at once</span>
+          <span class="imp-step">
+            <button class="imp-chip" data-bays="-1"${cfgBays(u.cfg) > 1 ? "" : " disabled"}>−</button>
+            <b class="mono">${nf(cfgBays(u.cfg))}</b>
+            <button class="imp-chip" data-bays="1"${cfgBays(u.cfg) < 8 && cfgSockets(u.cfg) ? "" : " disabled"}>+</button>
+          </span>
+        </div>
+        <details class="imp-fold" id="up-custom"${u.custom ? " open" : ""}>
+          <summary>Change the cables by hand</summary>
+          ${Object.keys(total).map((key) => `
+            <div class="imp-cfg-row">
+              <span>${esc(socketLabel(key))} <span class="mono">${esc(key)}</span></span>
+              <span class="imp-step">
+                <button class="imp-chip" data-conn="${esc(key)}" data-step="-1"${
+                  (u.cfg.conn[key] || 0) ? "" : " disabled"}>−</button>
+                <b class="mono">${nf(u.cfg.conn[key] || 0)}</b>
+                <button class="imp-chip" data-conn="${esc(key)}" data-step="1">+</button>
+              </span>
+            </div>`).join("")}
+          ${kwRows.map(([key, kws]) => `<div class="imp-cfg-row">
+            <span class="ctl-label">${esc(socketLabel(key))} power</span>
+            <span class="imp-seg">${kws.map((kw) =>
+              `<button class="seg-btn${u.cfg.kw?.[key] === kw ? " is-on" : ""}"
+                       data-kw="${kw}" data-kwfor="${esc(key)}">${kw}</button>`).join("")}</span>
           </div>`).join("")}
-        ${kwRows.map(([key, kws]) => `<div class="imp-cfg-row">
-          <span class="ctl-label">${esc(key)} power</span>
-          <span class="imp-seg">${kws.map((kw) =>
-            `<button class="seg-btn${u.cfg.kw?.[key] === kw ? " is-on" : ""}"
-                     data-kw="${kw}" data-kwfor="${esc(key)}">${kw}</button>`).join("")}</span>
-        </div>`).join("")}
+          <p class="imp-note">For a cabinet the sources do not describe. Each point keeps the
+             layout it was placed with.</p>
+        </details>
       </div>
-      <p class="imp-note">Four CCS sockets is two twin cabinets or four singles, and AFDC cannot
-         say which. Set what one cabinet carries, place those, then change it for the next kind —
-         each point keeps the layout it was placed with.</p>
 
       ${groups.size ? `<div class="imp-balance">${[...groups].map(([label, n]) =>
-        `<div class="imp-balance-row"><span>${nf(n)} × ${esc(label)}</span></div>`).join("")}</div>` : ""}
+        `<div class="imp-balance-row"><span>${nf(n)} placed: ${esc(label)}</span></div>`).join("")}</div>` : ""}
 
       ${nudged.length ? `<div class="imp-moved">
         ${nudged.map((o) => `<div class="imp-moved-row">
@@ -2069,6 +2505,10 @@ function upgradeCard(side) {
       ${!u.open ? `<p class="imp-note">${gearSummary(u.gear)
         ? esc(gearSummary(u.gear))
         : `Nothing set — the dispensers go in with sockets and power only.`}</p>
+        ${hint && modelLabel(u.gear) !== modelLabel(hint) ? `<div class="imp-models">
+          <button class="imp-chip" id="up-gear-hint" title="supercharge.info names one hardware generation for this site">
+            ${esc(modelLabel(hint))} <span class="tag-src">SC.info</span></button>
+        </div>` : ""}
         ${Object.keys(models()).length ? `<div class="imp-models">
           ${Object.keys(models()).sort().map((label) => `
             <button class="imp-chip${modelLabel(u.gear) === label ? " is-on" : ""}"
@@ -2180,6 +2620,31 @@ function upgradeCard(side) {
   side.querySelectorAll("[data-tool]").forEach((b) => {
     b.onclick = () => { u.tool = u.tool === b.dataset.tool ? null : b.dataset.tool; paintSide(); };
   });
+  bindEvidence(side);
+  side.querySelectorAll("[data-kind]").forEach((b) => {
+    b.onclick = () => {
+      const kind = inv.kinds[Number(b.dataset.kind)];
+      if (!kind) return;
+      u.custom = false;
+      u.cfg = kindCfg(kind, u.per || 1);
+      // choosing what to place is asking to place it
+      if (u.tool !== "points") u.tool = "points";
+      paintSide();
+    };
+  });
+  side.querySelectorAll("[data-bays]").forEach((b) => {
+    b.onclick = () => {
+      const next = Math.max(1, cfgBays(u.cfg) + Number(b.dataset.bays));
+      const kind = inv.kinds.find((k) => kindKey(k) === u.cfg.kind);
+      /* On a kind, more bays is more of that port on one box, so the cables
+         scale with it. On a hand-built cabinet the cables are whatever was
+         set and only the count of cars changes. */
+      if (kind) { u.per = next; u.cfg = kindCfg(kind, next); }
+      else u.cfg = { ...u.cfg, bays: next };
+      paintSide();
+    };
+  });
+  side.querySelector("#up-custom")?.addEventListener("toggle", (e) => { u.custom = e.target.open; });
   side.querySelectorAll("[data-conn]").forEach((b) => {
     b.onclick = () => {
       const key = b.dataset.conn;
@@ -2187,17 +2652,29 @@ function upgradeCard(side) {
       const conn = { ...u.cfg.conn, [key]: next };
       const kw = { ...u.cfg.kw };
       // a connector just switched on takes the best power the site offers it
-      if (next && kw[key] == null) kw[key] = siteSockets(CUR.site.units).powers[key]?.[0] ?? null;
+      if (next && kw[key] == null) kw[key] = powers[key]?.[0] ?? null;
       if (!next) delete kw[key];
-      u.cfg = { conn, kw };
+      /* Changed by hand, so it is no longer the kind it started as: it stops
+         counting against that row, and how many cars it serves goes back to
+         being read off the cables until it is set. */
+      u.custom = true;
+      u.cfg = { conn, kw, kind: null };
       paintSide();
     };
   });
   side.querySelectorAll("[data-kw]").forEach((b) => {
     b.onclick = () => {
-      u.cfg = { ...u.cfg, kw: { ...u.cfg.kw, [b.dataset.kwfor]: Number(b.dataset.kw) } };
+      u.custom = true;
+      u.cfg = { ...u.cfg, kind: null, kw: { ...u.cfg.kw, [b.dataset.kwfor]: Number(b.dataset.kw) } };
       paintSide();
     };
+  });
+  side.querySelectorAll("[data-over]").forEach((b) => {
+    b.onchange = () => { if (b.checked) u.over.add(b.dataset.over); else u.over.delete(b.dataset.over); };
+  });
+  side.querySelector("#up-gear-hint")?.addEventListener("click", () => {
+    u.gear = { ...u.gear, ...hint };
+    paintSide();
   });
   side.querySelectorAll("[data-home]").forEach((b) => {
     b.onclick = () => {
@@ -2499,7 +2976,11 @@ async function saveUpgrade() {
       /* The station's own totals, not a copy of whatever single number the node
          carried. A site whose points say 6 × 2 sockets and whose way still says
          capacity=1 is worse than either alone. */
-      const way = await createWay(ring, fillIdentity(stationTags(base, s.units), u.gear), cs);
+      /* Onto an element that already exists, the sources fill gaps and replace
+         a bare "yes"; a real value that disagrees is only replaced where it
+         was ticked. Onto a new one there is nothing to disagree with. */
+      const way = await createWay(ring, fillIdentity(
+        stationTags(base, siteInventory(s), { overwrite: node ? (u.over || null) : null }), u.gear), cs);
       madeWay = way.id;
       log.push({ type: "way", id: way.id, cs, name: `${base.name || s.net} outline` });
 
@@ -2623,7 +3104,7 @@ function hiddenSites(allStates = false) {
   const restored = rememberKeys(K.restore);
   return MERGED.sites
     .filter((s) => up
-      ? s.osm && !s.hostOnly && s.osmId?.[0] === "n" && s.units?.length
+      ? s.osm && !s.hostOnly && s.osmId?.[0] === "n" && canItemise(s)
       : !s.osm && s.lat != null && s.lon != null)
     .filter((s) => !VIEW.net || s.net === VIEW.net)
     .filter((s) => allStates || !VIEW.state || s.state === VIEW.state)
@@ -2660,6 +3141,7 @@ const ICON = {
   globe: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/></svg>`,
   pin: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3z"/></svg>`,
   close: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+  back: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>`,
 };
 
 const CUR = { site: null, tags: null, pin: null, layers: [], layer: null, near: [], queue: [], at: 0, busy: false, saved: 0 };
@@ -2680,7 +3162,8 @@ function shell() {
   root.innerHTML = `
     <div class="imp-bar">
       <div class="imp-bar-left">
-        <div>
+        <button class="imp-back" id="imp-quit" title="Back to the board (Esc)" aria-label="Back to the board">${ICON.back}Board</button>
+        <div class="imp-title">
           <div class="eyebrow">Make improvements</div>
           <div class="imp-progress" id="imp-progress"></div>
         </div>
@@ -2702,7 +3185,6 @@ function shell() {
       </div>
       <div class="imp-bar-right">
         <span class="imp-who" id="imp-who"></span>
-        <button class="icon-btn" id="imp-quit" title="Close" aria-label="Close">${ICON.close}</button>
       </div>
     </div>
     <div class="imp-body">
@@ -3098,7 +3580,7 @@ function workCard(side) {
       <h3>${esc(s.name || "Unnamed site")}</h3>
       <div class="imp-net">${brandMark(s.net)}${esc(s.net)}</div>
       <dl class="imp-facts">
-        <dt>Ports</dt><dd>${nf(s.ports)}</dd>
+        <dt>Ports</dt><dd>${portsLine(siteInventory(s))}</dd>
         <dt>Reported</dt><dd class="mono">${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}${
           (() => {
             /* Say what the crosses on the map are. A mark labelled "AFDC" 200 m
@@ -3114,9 +3596,10 @@ function workCard(side) {
               ${nf(Math.round(far))} m apart${names.length > 1 ? ` · ${esc(names.join(" / "))}` : ""}</span>`;
           })()}</dd>
         <dt>Source</dt><dd>${esc(s.src)}</dd>
-        ${s.open ? `<dt>Opened</dt><dd>${esc(s.open)}</dd>` : ""}
       </dl>
     </div>
+
+    ${evidenceCard(s)}
 
     ${CUR.near.length ? `
       <div class="imp-warn is-hot">
@@ -3191,6 +3674,7 @@ function workCard(side) {
     </div>
     <div class="imp-tags" id="imp-tags"></div>
     <div class="imp-wd" id="imp-wd" hidden></div>
+    <div class="imp-offers" id="imp-offers"></div>
 
     <label class="imp-check">
       <input type="checkbox" id="imp-fixme"${CUR.tags.fixme === FIXME_APPROX ? " checked" : ""}>
@@ -3233,6 +3717,7 @@ function workCard(side) {
 
   paintTags();
   bindShapeSwitch(side);
+  bindEvidence(side);
   const fx = side.querySelector("#imp-fixme");
   if (fx) {
     fx.onchange = () => {
@@ -3267,6 +3752,7 @@ function workCard(side) {
   side.querySelectorAll("[data-access]").forEach((b) => {
     b.onclick = () => {
       CUR.tags = withAfter(CUR.tags, "amenity", "access", b.dataset.access);
+      delete CUR.why?.access;
       paintTags();
       paintSide();
     };
@@ -3300,20 +3786,57 @@ function paintTags() {
            title="${missing ? `Add ${esc(k)}:wikidata` : `Change ${esc(k)}:wikidata`}"
            aria-label="Look up ${esc(k)} on Wikidata">${ICON.globe}</button>`
       : "";
+    /* Whose figure this is. A value typed or changed by hand has no label —
+       it is the mapper's, and the edit removed the claim that it was anyone
+       else's. */
+    const src = CUR.why?.[k];
     row.innerHTML =
       `<div class="tag-k mono">${esc(k)}</div>` +
-      `<div class="tag-v">${esc(v)}</div>` +
+      `<div class="tag-v">${esc(v)}${src ? ` <span class="tag-src" title="${esc(src[1])}">${esc(src[0])}</span>` : ""}</div>` +
       `<div class="tag-act">${wd}` +
         `<button class="tag-btn" data-act="edit" title="Edit ${esc(k)}" aria-label="Edit ${esc(k)}">${ICON.pencil}</button>` +
         `<button class="tag-btn" data-act="del" title="Delete ${esc(k)}" aria-label="Delete ${esc(k)}">${ICON.trash}</button>` +
       `</div>`;
     row.querySelector('[data-act="edit"]').onclick = () => editRow(row, k);
-    row.querySelector('[data-act="del"]').onclick = () => { delete CUR.tags[k]; paintTags(); };
+    row.querySelector('[data-act="del"]').onclick = () => { delete CUR.tags[k]; delete CUR.why?.[k]; paintTags(); };
     row.querySelector('[data-act="wd"]')?.addEventListener("click", () => openWikidata(k));
     host.append(row);
   }
   paintWikidata();
+  paintOffers();
   if (!Object.keys(CUR.tags).length) host.append(el("div", "imp-note", "No tags left — add at least one before saving."));
+}
+
+/* The optional extras, as chips under the tags. On means every tag the offer
+   carries is in the list with the offer's value; clicking it again takes them
+   back out, or — for the one offer that rewrites tags rather than adding them
+   — puts back what it replaced. */
+function paintOffers() {
+  const host = $("imp-offers");
+  if (!host || !CUR.site) return;
+  const list = offers(CUR.site);
+  const isOn = (o) => Object.entries(o.tags).every(([k, v]) => CUR.tags[k] === v);
+  host.innerHTML = list.length ? `
+    <div class="imp-h">More from the sources</div>
+    <div class="imp-poi-acts">
+      ${list.map((o) => `<button class="imp-chip${isOn(o) ? " is-on" : ""}" data-offer="${esc(o.id)}"
+          aria-pressed="${isOn(o)}" title="${esc(o.hint)}">${esc(o.label)} <span class="tag-src">${esc(o.src)}</span></button>`).join("")}
+    </div>
+    <p class="imp-note">Not added unless you click: true of the site, and yours to judge whether
+       they belong on the charging station.</p>` : "";
+  host.querySelectorAll("[data-offer]").forEach((b) => {
+    b.onclick = () => {
+      const o = list.find((x) => x.id === b.dataset.offer);
+      if (!o) return;
+      const on = isOn(o);
+      for (const [k, v] of Object.entries(o.tags)) {
+        if (!on) { CUR.tags[k] = v; (CUR.why ||= {})[k] = [o.src, o.hint]; continue; }
+        if (o.restore?.[k] != null) CUR.tags[k] = o.restore[k];
+        else { delete CUR.tags[k]; delete CUR.why?.[k]; }
+      }
+      paintTags();
+    };
+  });
 }
 
 /* ---- Wikidata lookup ------------------------------------------------------
@@ -3457,6 +3980,7 @@ function editRow(row, key) {
     const nk = kIn.value.trim(), nv = vIn.value.trim();
     if (!nk || !nv || nk.length > 255 || nv.length > 255) { paintTags(); return; }
     // rebuild in order so an edited key keeps its place in the list
+    if (nk !== key || nv !== val) delete CUR.why?.[key];
     CUR.tags = Object.fromEntries(
       Object.entries(CUR.tags).map(([k, v]) => (k === key ? [nk, nv] : [k, v])));
     syncMemory(nk);
@@ -3508,7 +4032,7 @@ function paintWho() {
   if (!who) return;
   const s = session();
   who.innerHTML = s
-    ? `<span class="mono">${esc(s.user)}</span>${envKey() === "dev" ? ` <span class="chip" style="color:var(--s4)">sandbox</span>` : ""}
+    ? `<span class="mono">${esc(s.user)}</span>${envKey() === "dev" ? ` <span class="chip" style="color:var(--warn)">sandbox</span>` : ""}
        <button class="imp-link" id="imp-out">sign out</button>`
     : "";
   who.querySelector("#imp-out")?.addEventListener("click", signOut);
@@ -3551,8 +4075,8 @@ async function show() {
      imagery supports. One editor, two starting conditions. */
   if (MODE() === "upgrade" || CUR.up?.shape === "area") {
     CUR.up = { tool: null, ring: [], pts: [], square: true, keep: "point",
-               shape: "area",
-               cfg: defaultCfg(CUR.site?.units), gear: gearFor(CUR.site?.net) };
+               shape: "area", per: 1, custom: false, over: null,
+               cfg: defaultCfg(siteInventory(CUR.site)), gear: gearFor(CUR.site?.net) };
     MAP.onmapclick = upgradeClick;
     MAP.drawOthers = drawUpgrade;
     /* Only charge points, and only nodes. A station mapped as an area cannot be
@@ -3582,7 +4106,8 @@ async function show() {
     MAP.ongrab = null;
   }
 
-  CUR.tags = proposeTags(s);
+  CUR.why = {};
+  CUR.tags = proposeTags(s, CUR.why);
   CUR.raw = networkFor(s);        // names as proposed, before any relabelling
   CUR.pin = { lat: s.lat, lon: s.lon };
   CUR.layers = rankLayers(s.lon, s.lat);
@@ -4002,6 +4527,8 @@ async function open() {
   root.hidden = false;
   document.body.classList.add("is-improving");
   paintWho();
+  // before sign-in too, so the switch never sits with neither side selected
+  paintModes();
   paintSide();
   MAP.schedule();
   addEventListener("keydown", keys);
@@ -4055,6 +4582,13 @@ window.OSMKit = {
   // the Wikidata lookup and, importantly, the answers already confirmed on this
   // board — a brand named once is named everywhere
   wikidataSearch, recallWikidata, rememberWikidata, forgetWikidata,
+  /* What the editor would write, and the parsers behind it. Exposed so
+     tools/stress.js can run every site through the same functions the panel
+     calls, rather than through a copy of them. `extraTags2` is the optional
+     offers under their old export name, kept so the name `extraTags` above
+     goes on meaning what it always has. */
+  proposeTags, offers, extraTags2: offers, stationTags, stationFacts, stationConflicts,
+  pointTags, kindCfg, defaultCfg, cfgBays, parseHours, parsePrice, startDate, expandStreet,
 };
 
 const btn = $("improve-open");

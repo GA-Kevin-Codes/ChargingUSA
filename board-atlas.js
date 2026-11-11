@@ -1,9 +1,10 @@
 /* <us-map> — state shading and the site layer as one subject.
 
-   From the Claude Design project "US Charging Board redesign", turn 2 option 2a
-   ("Atlas"). The projection frame, the CONUS/AK/HI insets, the two-pass dot
-   layer and the tooltips are the design's; what changed on the way in is where
-   the data comes from.
+   The projection frame, the CONUS/AK/HI insets and the two-pass dot layer came
+   with the "Atlas" layout. Its colours used to be written into this file for
+   one dark ground; they are read from the stylesheet now (`--map-*`), at the
+   moment of painting, so the map follows the page between day and night
+   instead of being the one panel that does not.
 
    The design's copy fetched three files it had generated from a snapshot. This
    one is handed the board's own merge instead, through `setAtlasData`. A static
@@ -94,6 +95,36 @@
   const h = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const cfg = (el, name) => (el._cfg && el._cfg[name] != null ? el._cfg[name] : el.getAttribute(name));
+
+  /* The map's palette, as the stylesheet has it right now. A canvas keeps
+     whatever it was painted with, so this is asked again on every paint rather
+     than once at load. The fallbacks are the daytime values: a token that is
+     missing should draw something legible, not transparent black. */
+  const PALETTE = {
+    lo: ["--map-lo", "#e9e3d3"], hi: ["--map-hi", "#94a8ba"], none: ["--map-null", "#f4f0e6"],
+    line: ["--map-line", "#fbf9f4"], pick: ["--map-pick", "#18222d"], label: ["--map-label", "#18222d99"],
+    on: ["--map-on", "#0f7d57"], off: ["--map-off", "#ee6a1e"],
+  };
+  function palette(el) {
+    const css = getComputedStyle(el);
+    const out = {};
+    for (const [k, [name, fallback]] of Object.entries(PALETTE)) out[k] = css.getPropertyValue(name).trim() || fallback;
+    return out;
+  }
+  const rgb = (hex) => {
+    const m = /^#?([0-9a-f]{6})/i.exec(hex) || /^#?([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(hex);
+    if (!m) return [128, 128, 128];
+    const v = m.length === 2 ? m[1] : m[1] + m[1] + m[2] + m[2] + m[3] + m[3];
+    return [0, 2, 4].map((i) => parseInt(v.slice(i, i + 2), 16));
+  };
+  /* One ramp between two ends. Mixed in linear light rather than on the raw
+     byte values, so the middle of the scale is a middle tone and not a murky
+     one. */
+  const lin = (c) => Math.pow(c / 255, 2.2), unlin = (v) => Math.round(Math.pow(v, 1 / 2.2) * 255);
+  function ramp(lo, hi) {
+    const a = rgb(lo).map(lin), b = rgb(hi).map(lin);
+    return (t) => `rgb(${a.map((v, i) => unlin(v + (b[i] - v) * t)).join(",")})`;
+  }
   const flag = (v) => v != null && v !== false && v !== "false";
 
   function hitState(outline, proj, mx, my) {
@@ -124,13 +155,10 @@
       Object.assign(this.style, { display: "block", position: "relative", cursor: "pointer" });
       this._cv = document.createElement("canvas");
       Object.assign(this._cv.style, { display: "block", width: "100%" });
+      // styled by the page (.map-tip), so it changes with the theme like the rest
       this._tip = document.createElement("div");
-      Object.assign(this._tip.style, {
-        position: "absolute", pointerEvents: "none", opacity: "0", zIndex: "5",
-        transform: "translate(-50%,-135%)", whiteSpace: "nowrap",
-        font: "500 11px/1.45 Archivo, system-ui, sans-serif", letterSpacing: ".02em",
-        padding: "6px 9px", background: "#f8f4f4", color: "#201e1d", transition: "opacity .1s ease",
-      });
+      this._tip.className = "map-tip";
+      this._tip.setAttribute("role", "status");
       this.append(this._cv, this._tip);
       this._cv.addEventListener("mousemove", (e) => this._hover(e));
       this._cv.addEventListener("mouseleave", () => { this._tip.style.opacity = "0"; this._hi = null; this._queue(); });
@@ -221,8 +249,9 @@
       const norm = (v) => (hi === lo ? 0.5 : (v - lo) / (hi - lo));
       this._vals = vals; this._metric = metric; this._agg2 = agg;
 
-      /* Shading stays neutral so the accent belongs to the dots alone. */
-      const shade = (t) => `oklch(${(12 + t * 18).toFixed(1)}% ${(0.004 + t * 0.010).toFixed(3)} 40)`;
+      /* Shading stays neutral so colour belongs to the dots alone. */
+      const pal = palette(this);
+      const shade = ramp(pal.lo, pal.hi);
 
       ctx.lineJoin = "round";
       for (const [code, st] of Object.entries(outline)) {
@@ -231,18 +260,34 @@
         const px = proj[key];
         const v = vals.get(code);
         const dim = focus && code !== focus;
-        const sel = code === (this._hi || "") || code === focus;
         for (const ring of st.rings) {
           ctx.beginPath();
           ring.forEach(([lon, lat], i) => { const [x, y] = px(lon, lat); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
           ctx.closePath();
-          ctx.fillStyle = v == null ? "#141313" : shade(norm(v));
+          ctx.fillStyle = v == null ? pal.none : shade(norm(v));
           ctx.globalAlpha = dim ? 0.45 : 1;
           ctx.fill();
-          ctx.strokeStyle = sel && !dim ? "#f8f4f4" : "#0e0d0d";
-          ctx.lineWidth = sel && !dim ? 1.6 : 0.9;
+          ctx.strokeStyle = pal.line;
+          ctx.lineWidth = 1;
           ctx.stroke();
           ctx.globalAlpha = 1;
+        }
+      }
+      /* The picked state's outline goes on after every fill. Drawn in the same
+         pass it was half painted over by whichever neighbours came later in
+         the list, so the highlight had gaps along shared borders. */
+      const picked = [...new Set([this._hi, focus].filter((c) => c && outline[c]))];
+      for (const code of picked) {
+        const key = regionOf(code);
+        if (!key || !proj[key]) continue;
+        const px = proj[key];
+        ctx.strokeStyle = pal.pick;
+        ctx.lineWidth = 1.8;
+        for (const ring of outline[code].rings) {
+          ctx.beginPath();
+          ring.forEach(([lon, lat], i) => { const [x, y] = px(lon, lat); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+          ctx.closePath();
+          ctx.stroke();
         }
       }
 
@@ -272,18 +317,21 @@
             ctx.beginPath();
             ctx.arc(x, y, r, 0, 6.2832);
             ctx.fill();
-            if (focus) this._pts.push(x, y, d[i + 2], d[i + 3], d[i + 5]);
+            // zoomed in there are few enough to give each a rim, which keeps
+            // neighbours apart where a city stacks them
+            if (focus) { ctx.stroke(); this._pts.push(x, y, d[i + 2], d[i + 3], d[i + 5]); }
           }
           ctx.globalAlpha = 1;
         };
-        if (mode !== "unmapped") { ctx.fillStyle = "#b9b5b5"; pass(true); }
-        if (mode !== "mapped") { ctx.fillStyle = cfg(this, "accent") || "#ff563c"; pass(false); }
+        ctx.strokeStyle = pal.line; ctx.lineWidth = 0.9;
+        if (mode !== "unmapped") { ctx.fillStyle = pal.on; pass(true); }
+        if (mode !== "mapped") { ctx.fillStyle = cfg(this, "accent") || pal.off; pass(false); }
       }
 
       if (flag(cfg(this, "labels")) && !focus) {
-        ctx.font = "700 9px Archivo, system-ui, sans-serif";
+        ctx.font = "700 9.5px Overpass, system-ui, sans-serif";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillStyle = "rgba(248,244,244,.5)";
+        ctx.fillStyle = pal.label;
         for (const [code, st] of Object.entries(outline)) {
           const key = regionOf(code);
           if (!key || !proj[key]) continue;
@@ -312,11 +360,9 @@
         if (best >= 0) {
           const net = this._d.points.nets[this._pts[best + 2]];
           const ports = this._pts[best + 3], on = (this._pts[best + 4] & 1) === 1;
-          this._tip.innerHTML = '<b style="font-weight:700">' + h(net) + "</b> · " + ports + " DC ports<br>" +
-            '<span style="color:' + (on ? "#4f4b4b" : "#c8300f") + '">' + (on ? "on OpenStreetMap" : "missing from the map") + "</span>";
-          this._tip.style.left = this._pts[best] + "px";
-          this._tip.style.top = this._pts[best + 1] + "px";
-          this._tip.style.opacity = "1";
+          this._tip.innerHTML = "<b>" + h(net) + "</b> · " + ports + " DC ports<br>" +
+            '<span class="' + (on ? "tip-sub" : "tip-off") + '">' + (on ? "on OpenStreetMap" : "missing from the map") + "</span>";
+          this._place(this._pts[best], this._pts[best + 1]);
           return;
         }
       }
@@ -326,11 +372,20 @@
       const st = this._d.states[found] || {};
       const a = (this._agg2 || {})[found] || { sites: 0, ports: 0, mapped: 0 };
       const pct = a.sites ? Math.round((a.mapped / a.sites) * 100) : 0;
-      this._tip.innerHTML = '<b style="font-weight:700">' + h(st.name || found) + "</b> · " +
+      this._tip.innerHTML = "<b>" + h(st.name || found) + "</b> · " +
         a.sites.toLocaleString() + " sites, " + a.ports.toLocaleString() + " ports<br>" +
-        '<span style="color:#4f4b4b">' + pct + "% on the map · </span>" +
-        '<span style="color:#c8300f">' + (a.sites - a.mapped).toLocaleString() + " missing</span>";
-      this._tip.style.left = mx + "px"; this._tip.style.top = my + "px"; this._tip.style.opacity = "1";
+        '<span class="tip-sub">' + pct + "% on the map · </span>" +
+        '<span class="tip-off">' + (a.sites - a.mapped).toLocaleString() + " missing</span>";
+      this._place(mx, my);
+    }
+
+    /* Put the tooltip over the point, but keep all of it inside the map: at the
+       east and west coasts a centred label ran off the edge of the card. */
+    _place(x, y) {
+      const tip = this._tip, half = tip.offsetWidth / 2, W = this.clientWidth;
+      tip.style.left = Math.max(half + 4, Math.min(W - half - 4, x)) + "px";
+      tip.style.top = y + "px";
+      tip.style.opacity = "1";
     }
   }
 

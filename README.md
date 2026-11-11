@@ -7,6 +7,16 @@ The board is static: open `index.html` and it reads the saved payloads in
 `data/`. `tools/` refreshes those payloads and runs hourly from GitHub Actions —
 OpenStreetMap incrementally every hour, the slower sources once a day.
 
+## The look
+
+The board is drawn as a road atlas, and colour means what a highway sign makes
+it mean: guide green is *on the map*, work-zone orange is *missing*, service
+blue is something you can do. It follows the system between a paper ground by
+day and asphalt by night, and the button in the header overrides that. The
+whole palette is the block of custom properties at the top of `index.html`;
+the map and the editor paint their canvases from the same tokens, so change a
+value there rather than in the scripts.
+
 ## Sources
 
 | | |
@@ -19,6 +29,36 @@ OpenStreetMap incrementally every hour, the slower sources once a day.
 Positions published by an operator are leads, not surveys. Anything drawn from
 this board onto OpenStreetMap should be checked against imagery first — which is
 what the built-in editor is for.
+
+## What the editor proposes, and from what
+
+Each site gets one *inventory* (`siteInventory` in `app.js`): its ports — one
+vehicle charging — grouped into kinds, each with its cables and what each cable
+delivers. Tags, the dispensers offered for placing, the station totals and the
+GeoJSON export are all read off it, so they cannot disagree with one another.
+
+- `capacity` is ports, never cables. A twin-head cabinet is one port.
+- `socket:<type>` is cables of that type; `socket:<type>:output` is that
+  connector's own figure, never the cabinet's best.
+- Where two sources count a site differently both figures are shown, and where
+  a value already on the map differs from the sources it is kept unless the
+  mapper ticks it.
+- Free text becomes a tag only when it parses cleanly — hours, a single price —
+  and is otherwise shown in the source's own words.
+- An open date that many sites of one network share is a batch-load date and is
+  not written as `start_date`.
+
+`tools/stress.js` runs every site through that same code and checks the
+arithmetic, including against a second, independent reading of the raw
+payload:
+
+```bash
+bun tools/stress.js
+```
+
+It exits non-zero if an invariant fails, and lists how often each kind of
+source disagreement occurs. Run it after changing the merge, the inventory or
+the tag proposals.
 
 ## Licensing
 

@@ -6,7 +6,10 @@
    every fetch of the brand table.
    
    `-dark` files are the mark drawn for a dark ground — white where the base is
-   navy. The board is dark only, so those win wherever they exist. */
+   navy. Where one exists it is the file recorded here, and the board works
+   back to the base file from its name: it has a day side and a night side, so
+   `brandMark` in app.js emits both and the stylesheet shows the one that suits.
+   A `-dark` file therefore always needs its base file beside it. */
 import { readdirSync, readFileSync, writeFileSync } from "fs";
 
 const ICONS = new URL("../icons/", import.meta.url).pathname;

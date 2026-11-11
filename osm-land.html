@@ -5,11 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Signing in to OpenStreetMap…</title>
 <style>
+  /* The board's paper-and-asphalt grounds, restated: this page loads nothing
+     from the board, so it carries the few values it needs. */
   body { margin: 0; display: grid; place-items: center; min-height: 100vh;
-         font: 15px/1.6 system-ui, sans-serif; background: #f3f1ed; color: #17150f; }
-  main { max-width: 34ch; padding: 24px; text-align: center; }
+         font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: #f1ede2; color: #18222d; }
+  main { max-width: 36ch; margin: 24px; padding: 26px 28px; text-align: center;
+         background: #fbf9f4; border: 1px solid #ddd6c5; border-radius: 16px; }
+  main::before { content: ""; display: block; width: 40px; height: 40px; margin: 0 auto 14px; border-radius: 9px;
+         background: #1b4f9c url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='4.5' fill='none' stroke='%23fff' stroke-width='1.6'/%3E%3Cpath d='M17.6 6 9.5 17.4h5.2L13.6 26l8.9-12.2h-5.6z' fill='%23fff'/%3E%3C/svg%3E") center / contain no-repeat; }
   code { font-size: 13px; word-break: break-all; }
-  @media (prefers-color-scheme: dark) { body { background: #131211; color: #f6f1e9; } }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0f1317; color: #eef2f5; }
+    main { background: #171c22; border-color: #2a323c; }
+  }
 </style>
 </head>
 <body>
