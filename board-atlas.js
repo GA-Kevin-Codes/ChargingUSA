@@ -26,7 +26,7 @@
     while (WAITING.length) WAITING.shift()(CACHE);
     for (const el of MOUNTED) {
       el._d = CACHE;
-      el._aggKey = null;
+      el._aggKey = null; el._caggKey = null;
       el._index && el._index();
       el._queue ? el._queue() : el._paint && el._paint();
     }
@@ -75,7 +75,7 @@
 
   /* The host may hand these over as properties or as attributes depending on how
      the element is mounted, so every setting is read through one accessor. */
-  const ATTRS = ["metric", "dots", "brand", "focus", "ratio", "labels", "accent"];
+  const ATTRS = ["metric", "dots", "brand", "focus", "county", "ratio", "labels", "accent"];
   function wireCfg(el) {
     el._cfg = {};
     for (const a of ATTRS) {
@@ -128,6 +128,17 @@
   }
   const flag = (v) => v != null && v !== false && v !== "false";
 
+  const inRingsAt = (lon, lat, rings) => {
+    let inside = false;
+    for (const ring of rings) {
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i], [xj, yj] = ring[j];
+        if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+    }
+    return inside;
+  };
+
   function hitState(outline, proj, mx, my) {
     for (const [code, st] of Object.entries(outline)) {
       const key = regionOf(code);
@@ -162,9 +173,19 @@
       this._tip.setAttribute("role", "status");
       this.append(this._cv, this._tip);
       this._cv.addEventListener("mousemove", (e) => this._hover(e));
-      this._cv.addEventListener("mouseleave", () => { this._tip.style.opacity = "0"; this._hi = null; this._queue(); });
-      this._cv.addEventListener("click", () => {
-        this.dispatchEvent(new CustomEvent("map-pick", { detail: { code: this._hi || null }, bubbles: true, composed: true }));
+      this._cv.addEventListener("mouseleave", () => {
+        this._tip.style.opacity = "0"; this._hi = null; this._hiCounty = null; this._hiSite = null; this._queue();
+      });
+      /* What a click lands on, most specific first: a site, then a county,
+         then a state. The hover worked all three out; the click reports the
+         one it found. A site used to report its state instead, and since that
+         was the state already open, the map zoomed out. */
+      this._cv.addEventListener("click", (e) => {
+        this._hover(e);
+        const detail = this._hiSite != null ? { site: this._hiSite }
+          : this._hiCounty ? { county: this._hiCounty, code: this._focus }
+          : { code: this._hi || null };
+        this.dispatchEvent(new CustomEvent("map-pick", { detail, bubbles: true, composed: true }));
       });
       MOUNTED.add(this);
       load().then((d) => { this._d = d; this._index(); this._paint(); });
@@ -172,7 +193,7 @@
       this._ro.observe(this);
     }
     disconnectedCallback() { MOUNTED.delete(this); this._ro && this._ro.disconnect(); }
-    static get observedAttributes() { return ["metric", "dots", "brand", "focus", "ratio", "labels"]; }
+    static get observedAttributes() { return ["metric", "dots", "brand", "focus", "county", "ratio", "labels"]; }
     attributeChangedCallback() { this._queue(); }
     _queue() {
       /* A timer, not requestAnimationFrame: a backgrounded tab throttles rAF and
@@ -211,6 +232,29 @@
       return out;
     }
 
+    /* The same, per county of the open state, keyed by the county's place in
+       its list. Only meaningful while a state is open and its counties are
+       loaded; empty otherwise. */
+    _cagg() {
+      const p = this._d.points, brand = cfg(this, "brand") || "";
+      const key = `${brand || "*"}|${this._d.counties?.state || ""}`;
+      if (this._caggKey === key && this._caggVal) return this._caggVal;
+      const want = brand ? this._netIdx.get(brand) : -2;
+      const out = new Map();
+      if (p && this._d.counties) {
+        const { d, stride } = p;
+        for (let i = 0; i < d.length; i += stride) {
+          const ci = d[i + 6];
+          if (ci == null || ci < 0 || (want !== -2 && d[i + 2] !== want)) continue;
+          const e = out.get(ci) || { sites: 0, ports: 0, mapped: 0 };
+          e.sites++; e.ports += d[i + 3]; if (d[i + 5] & 1) e.mapped++;
+          out.set(ci, e);
+        }
+      }
+      this._caggKey = key; this._caggVal = out;
+      return out;
+    }
+
     _paint() {
       if (!this._d) return;
       const W = Math.max(320, this.getBoundingClientRect().width);
@@ -224,14 +268,25 @@
 
       const focus = cfg(this, "focus") || "";
       const outline = this._d.outline;
+      // the open state's counties, if they have arrived and are this state's
+      const cl = focus && this._d.counties?.state === focus ? this._d.counties.list : null;
+      const county = cl ? cfg(this, "county") || "" : "";
+      const ci = county ? cl.findIndex((c) => c.id === county) : -1;
       let proj;
-      if (focus && outline[focus]) {
+      if (ci >= 0) {
+        const px = fit([0.02, 0.03, 0.98, 0.97], pad(cl[ci].b, 0.08), W, H);
+        proj = { conus: px, ak: px, hi: px };
+      } else if (focus && outline[focus]) {
         const px = fit([0.02, 0.03, 0.98, 0.97], pad(ringBounds(outline[focus], focus), 0.06), W, H);
         proj = { conus: px, ak: px, hi: px };
       } else {
         proj = projectors(outline, W, H);
       }
-      this._proj = proj; this._focus = focus;
+      /* A hovered county belongs to the state it was hovered in. Opening
+         another state leaves the old index behind, pointing at whatever county
+         happens to have that number in the new list — or past the end of it. */
+      if (this._cl !== cl) { this._hiCounty = null; this._hiCountyIx = null; }
+      this._proj = proj; this._focus = focus; this._cl = cl; this._ci = ci;
 
       const metric = cfg(this, "metric") || "mapped";
       const agg = this._agg();
@@ -245,10 +300,25 @@
         else v = a.sites || null;
         if (v != null) vals.set(c, v);
       }
-      const sorted = [...vals.values()].sort((a, b) => a - b);
+      /* Inside an open state the shading is by county, on the county figures —
+         except per person, which needs a county population the board does not
+         carry; there the counties are outlined and left unshaded. */
+      const cagg = cl ? this._cagg() : null;
+      const cvals = new Map();
+      if (cl && metric !== "rate") {
+        for (let i = 0; i < cl.length; i++) {
+          const a = cagg.get(i);
+          if (!a) continue;
+          const v = metric === "mapped" ? (a.sites >= 3 ? (a.mapped / a.sites) * 100 : null)
+            : metric === "gap" ? a.sites - a.mapped : a.sites;
+          if (v != null) cvals.set(i, v);
+        }
+      }
+      const shaded = cl && metric !== "rate" ? cvals : vals;
+      const sorted = [...shaded.values()].sort((a, b) => a - b);
       const lo = sorted[0] ?? 0, hi = sorted[sorted.length - 1] ?? 1;
       const norm = (v) => (hi === lo ? 0.5 : (v - lo) / (hi - lo));
-      this._vals = vals; this._metric = metric; this._agg2 = agg;
+      this._vals = vals; this._metric = metric; this._agg2 = agg; this._cagg2 = cagg;
 
       /* Shading stays neutral so colour belongs to the dots alone. */
       const pal = palette(this);
@@ -299,6 +369,45 @@
         }
       }
 
+      if (cl) {
+        const px = proj.conus;
+        const path = (rings) => {
+          ctx.beginPath();
+          for (const ring of rings) {
+            ring.forEach(([lon, lat], i) => { const [x, y] = px(lon, lat); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+            ctx.closePath();
+          }
+        };
+        for (let i = 0; i < cl.length; i++) {
+          const c = cl[i], a = cagg.get(i), v = cvals.get(i);
+          path(c.rings);
+          const done = !!a && a.sites > 0 && a.mapped === a.sites;
+          ctx.globalAlpha = ci >= 0 && i !== ci ? 0.4 : 1;
+          if (metric !== "rate") {
+            ctx.fillStyle = done ? pal.done : v == null ? pal.none : shade(norm(v));
+            ctx.fill("evenodd");
+          }
+          ctx.strokeStyle = pal.line; ctx.lineWidth = 0.8;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+        for (const i of new Set([this._hiCountyIx, ci].filter((x) => x != null && x >= 0 && x < cl.length))) {
+          path(cl[i].rings);
+          ctx.strokeStyle = pal.pick; ctx.lineWidth = 1.8; ctx.stroke();
+        }
+        // county names once there is room for them: inside one county, or a small state
+        if (ci < 0 && cl.length <= 30 || ci >= 0) {
+          ctx.font = "700 9.5px Overpass, system-ui, sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = pal.label;
+          for (let i = 0; i < cl.length; i++) {
+            if (ci >= 0 && i !== ci) continue;
+            const b = cl[i].b;
+            const [x, y] = px((b.lon0 + b.lon1) / 2, ci >= 0 ? b.lat1 : (b.lat0 + b.lat1) / 2);
+            ctx.fillText(cl[i].name, x, ci >= 0 ? y - 10 : y);
+          }
+        }
+      }
+
       const mode = cfg(this, "dots") || "both";
       this._pts = [];
       if (mode !== "none" && this._d.points) {
@@ -306,7 +415,7 @@
         const brand = cfg(this, "brand") || "";
         const want = brand ? this._netIdx.get(brand) : -2;
         // five times the sites with Level 2 in: smaller dots, or the country is one blot
-        const r = focus ? 3.1 : d.length / stride > 30000 ? 1.15 : 1.7;
+        const r = ci >= 0 ? 4.2 : focus ? 3.1 : d.length / stride > 30000 ? 1.15 : 1.7;
         const fi = focus ? this._stCode.indexOf(focus) : -1;
         const pass = (flagWanted) => {
           for (let i = 0; i < d.length; i += stride) {
@@ -322,13 +431,14 @@
             if (!px) continue;
             const [x, y] = px(d[i + 1] / 1e4, d[i] / 1e4);
             if (x < -8 || y < -8 || x > W + 8 || y > H + 8) continue;
-            ctx.globalAlpha = fi >= 0 && si !== fi ? 0.3 : 1;
+            ctx.globalAlpha = (fi >= 0 && si !== fi) || (ci >= 0 && d[i + 6] !== ci) ? 0.3 : 1;
             ctx.beginPath();
             ctx.arc(x, y, r, 0, 6.2832);
             ctx.fill();
             // zoomed in there are few enough to give each a rim, which keeps
             // neighbours apart where a city stacks them
-            if (focus) { ctx.stroke(); this._pts.push(x, y, d[i + 2], d[i + 3], d[i + 5]); }
+            // the point's own index rides along, so a click can say which site it was
+            if (focus) { ctx.stroke(); if (si === fi) this._pts.push(x, y, d[i + 2], d[i + 3], d[i + 5], i / stride); }
           }
           ctx.globalAlpha = 1;
         };
@@ -360,7 +470,8 @@
         }
       }
 
-      const unit = { mapped: "% of sites on the map", gap: "sites missing", rate: "ports per 100k people", count: "sites" }[metric];
+      const unit = { mapped: "% of sites on the map", gap: "sites missing", rate: "ports per 100k people", count: "sites" }[metric] +
+        (cl && metric !== "rate" ? ", by county" : "");
       this.dispatchEvent(new CustomEvent("map-range", {
         detail: { lo, hi, unit, metric }, bubbles: true, composed: true,
       }));
@@ -370,20 +481,49 @@
       if (!this._d || !this._proj) return;
       const r = this._cv.getBoundingClientRect();
       const mx = e.clientX - r.left, my = e.clientY - r.top;
+      const was = [this._hi, this._hiCountyIx];
+      this._hiSite = null;
       if (this._focus && this._pts && this._pts.length) {
         let best = -1, bd = 81;
-        for (let i = 0; i < this._pts.length; i += 5) {
+        for (let i = 0; i < this._pts.length; i += 6) {
           const dx = this._pts[i] - mx, dy = this._pts[i + 1] - my, d2 = dx * dx + dy * dy;
           if (d2 < bd) { bd = d2; best = i; }
         }
         if (best >= 0) {
           const net = this._d.points.nets[this._pts[best + 2]];
           const ports = this._pts[best + 3], on = (this._pts[best + 4] & 1) === 1;
+          this._hiSite = this._pts[best + 5];
           this._tip.innerHTML = "<b>" + h(net) + "</b> · " + ports + " " + h(this._d.portWord || "DC ports") + "<br>" +
-            '<span class="' + (on ? "tip-sub" : "tip-off") + '">' + (on ? "on OpenStreetMap" : "missing from the map") + "</span>";
+            '<span class="' + (on ? "tip-sub" : "tip-off") + '">' +
+            (on ? "On OpenStreetMap · click to open it" : "Missing · click to map it") + "</span>";
           this._place(this._pts[best], this._pts[best + 1]);
+          this._cv.style.cursor = "pointer";
           return;
         }
+      }
+      /* A county of the open state, where the counties are in. Checked with
+         the same even-odd rule the board assigns sites by, against the
+         counties whose box holds the pointer. */
+      this._hiCounty = null; this._hiCountyIx = null;
+      if (this._cl) {
+        const [lon, lat] = this._unproject(mx, my);
+        const i = this._cl.findIndex((c) => lat >= c.b.lat0 && lat <= c.b.lat1 && lon >= c.b.lon0 && lon <= c.b.lon1 &&
+          inRingsAt(lon, lat, c.rings));
+        if (i >= 0) {
+          this._hiCounty = this._cl[i].id; this._hiCountyIx = i; this._hi = this._focus;
+          if (was[1] !== i) this._queue();
+          const a = this._cagg2?.get(i) || { sites: 0, ports: 0, mapped: 0 };
+          const pct = a.sites ? Math.floor((a.mapped / a.sites) * 100) : 0;
+          this._tip.innerHTML = "<b>" + h(this._cl[i].name) + "</b> · " +
+            a.sites.toLocaleString() + " sites, " + a.ports.toLocaleString() + " ports<br>" +
+            (!a.sites ? '<span class="tip-sub">No sites</span>'
+              : a.mapped === a.sites ? '<span class="tip-done">All of them are on the map</span>'
+              : '<span class="tip-sub">' + pct + "% on the map · </span>" +
+                '<span class="tip-off">' + (a.sites - a.mapped).toLocaleString() + " missing</span>");
+          this._place(mx, my);
+          return;
+        }
+        if (was[1] != null) this._queue();
       }
       const found = hitState(this._d.outline, this._proj, mx, my);
       if (found !== this._hi) { this._hi = found; this._queue(); }
@@ -398,6 +538,15 @@
           : '<span class="tip-sub">' + pct + "% on the map · </span>" +
             '<span class="tip-off">' + (a.sites - a.mapped).toLocaleString() + " missing</span>");
       this._place(mx, my);
+    }
+
+    /* Screen back to longitude and latitude, for the open state's projection.
+       Two probe points are enough: the projection is a scale and an offset on
+       each axis, and the latitude axis runs the other way. */
+    _unproject(mx, my) {
+      const px = this._proj.conus;
+      const [x0, y0] = px(-100, 40), [x1, y1] = px(-99, 41);
+      return [-100 + (mx - x0) / (x1 - x0), 40 + (my - y0) / (y1 - y0)];
     }
 
     /* Put the tooltip over the point, but keep all of it inside the map: at the

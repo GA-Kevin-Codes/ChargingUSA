@@ -1256,6 +1256,13 @@ kbd { font-size: 10.5px; background: var(--raised); border: 1px solid var(--rule
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
       </span>
+      <!-- the county inside the open state, when one is open -->
+      <span class="pick is-set" id="county-pick" hidden>
+        <span id="county-chip" class="pick-btn"></span>
+        <button id="county-clear" class="pick-x" title="Back to the whole state" aria-label="Back to the whole state">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </span>
       <span class="pick pick--net" id="net-pick">
         <button id="net-chip" class="pick-btn" title="Choose a network from the list">All networks</button>
         <button id="net-clear" class="pick-x" hidden title="Back to all networks" aria-label="Back to all networks">
@@ -1404,8 +1411,8 @@ kbd { font-size: 10.5px; background: var(--raised); border: 1px solid var(--rule
 </footer>
 
 <script src="site-keys.js?v=2"></script>
-<script src="board-atlas.js?v=facility1"></script>
-<script src="app.js?v=facility1"></script>
-<script src="edit.js?v=facility1"></script>
+<script src="board-atlas.js?v=county1"></script>
+<script src="app.js?v=county1"></script>
+<script src="edit.js?v=county1"></script>
 </body>
 </html>

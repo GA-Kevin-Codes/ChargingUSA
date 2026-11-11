@@ -145,7 +145,9 @@ const VIEW = { state: null, net: null, selected: null, metric: "pop", zoom: 1, p
                // room for one
                browse: "states",
                // Level 2 stations as well as fast charging; off unless asked for
-               l2: false };
+               l2: false,
+               // a county inside VIEW.state, by its five-digit FIPS code
+               county: null };
 let MERGED = null;
 
 const CONUS = { lat0: 24, lat1: 50, lon0: -125, lon1: -66 };
@@ -1054,10 +1056,15 @@ function atlasData(M) {
   const codes = Object.keys(STATES);
   const stIx = new Map(codes.map((c, i) => [c, i]));
 
-  const stride = 6;
+  /* Seven numbers per site: lat, lon, network, ports, state, flags, and the
+     county's place in the open state's county list (-1 outside it). */
+  const stride = 7;
+  const counties = VIEW.state ? COUNTIES[VIEW.state] : null;
+  const cIx = new Map((counties || []).map((c, i) => [c.id, i]));
   /* Every site, host-mapped ones included: they count as mapped in the figures
      beside the map, so leaving them off it made the two disagree. */
   const rows = M.sites.filter((s) => s.lat != null && s.lon != null);
+  ATLAS_ROWS = rows;
   const d = new Int32Array(rows.length * stride);
   let at = 0;
   for (const s of rows) {
@@ -1067,6 +1074,7 @@ function atlasData(M) {
     d[at + 3] = s.ports || 0;
     d[at + 4] = stIx.has(s.state) ? stIx.get(s.state) : -1;
     d[at + 5] = s.osm ? 1 : 0;
+    d[at + 6] = counties && s.state === VIEW.state && cIx.has(s.county) ? cIx.get(s.county) : -1;
     at += stride;
   }
 
@@ -1080,8 +1088,78 @@ function atlasData(M) {
     if (!e) continue;
     e.sites++; e.ports += s.ports || 0; if (s.osm) e.mapped++;
   }
-  return { outline, states, points: { nets, states: codes, d, stride }, portWord: M.l2 ? "ports" : "DC ports" };
+  return { outline, states, points: { nets, states: codes, d, stride }, portWord: M.l2 ? "ports" : "DC ports",
+           counties: counties ? { state: VIEW.state, list: counties } : null };
 }
+
+/* ------------------------------------------------------------- counties
+
+   A state's counties are loaded the first time it is opened, from
+   data/counties/XX.json, and every site in the state is then told which one
+   it stands in. That is one point-in-polygon test per site against the few
+   counties whose box contains it — a second or less for California with
+   Level 2 in. The answer is kept on the site, so the county filter is the
+   same cheap comparison the state filter is. */
+const COUNTIES = {};
+
+async function loadCounties(state) {
+  if (!state) return null;
+  if (COUNTIES[state] !== undefined) return COUNTIES[state];
+  const body = await grab(`/counties/${state}`).catch(() => null);
+  const list = (body?.counties || []).map((c) => {
+    let lat0 = 90, lat1 = -90, lon0 = 180, lon1 = -180;
+    for (const r of c.rings) for (const [lon, lat] of r) {
+      if (lat < lat0) lat0 = lat; if (lat > lat1) lat1 = lat;
+      if (lon < lon0) lon0 = lon; if (lon > lon1) lon1 = lon;
+    }
+    return { ...c, b: { lat0, lat1, lon0, lon1 } };
+  });
+  return (COUNTIES[state] = list.length ? list : null);
+}
+
+const inRings = (lon, lat, rings) => {
+  let inside = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+  }
+  return inside;
+};
+
+/* Which county each of a state's sites stands in. A site a few metres outside
+   every county — on a coastline the simplified boundary has cut off — goes to
+   the nearest by its box rather than to none, so the county counts add up to
+   the state's. */
+function assignCounties(sites, state, list) {
+  if (!list) return;
+  for (const s of sites) {
+    if (s.state !== state || s.countyOf === state || s.lat == null) continue;
+    s.countyOf = state;
+    let hit = list.find((c) => s.lat >= c.b.lat0 && s.lat <= c.b.lat1 && s.lon >= c.b.lon0 && s.lon <= c.b.lon1 &&
+      inRings(s.lon, s.lat, c.rings));
+    if (!hit) {
+      const gap = (c) => Math.max(0, c.b.lat0 - s.lat, s.lat - c.b.lat1) + Math.max(0, c.b.lon0 - s.lon, s.lon - c.b.lon1);
+      hit = list.reduce((a, c) => (gap(c) < gap(a) ? c : a), list[0]);
+    }
+    s.county = hit.id;
+  }
+}
+const countyName = (fips) => (COUNTIES[VIEW.state] || []).find((c) => c.id === fips)?.name || fips;
+
+/* Open what a site is: OpenStreetMap's own page where it is mapped, the
+   editor standing on it where it is not. One definition for every place on
+   the board that lists or draws a site. */
+function openSite(s) {
+  if (!s) return;
+  if (s.osm && s.osmId) {
+    const type = { n: "node", w: "way", r: "relation" }[s.osmId[0]];
+    window.open(`https://www.openstreetmap.org/${type}/${s.osmId.slice(1)}`, "_blank", "noopener");
+  } else if (window.ImproveAt) window.ImproveAt(s);
+}
+// the sites behind the packed map points, by point index
+let ATLAS_ROWS = [];
 
 const METRIC_TITLE = {
   mapped: "Percent of sites on the map",
@@ -1102,7 +1180,13 @@ function seg(hostId, options, current, onPick) {
 
 function render(M) {
   MERGED = M;
-  const Sstate = VIEW.state ? M.sites.filter((s) => s.state === VIEW.state) : M.sites;
+  /* A county narrows everything a state does — figures, lists, queue,
+     export — so it is applied here, with the state, before anything reads
+     the sites. The state rail is the exception, as it always was: it is the
+     picker, and reads every state. */
+  const Sstate = VIEW.state
+    ? M.sites.filter((s) => s.state === VIEW.state && (!VIEW.county || s.county === VIEW.county))
+    : M.sites;
   /* The rail stays whole: it is the picker, so filtering it to the current
      network would take away the means of switching or clearing. */
   const S = VIEW.net ? Sstate.filter((s) => s.net === VIEW.net) : Sstate;
@@ -1135,16 +1219,23 @@ function render(M) {
   $("prov").innerHTML =
     `<b>${nf(S.length)}</b> sites · <b>${nf(ports)}</b> ${M.l2 ? "ports" : "DC ports"} · ${esc(shortStamp(M.stamps))}`;
   const stName = VIEW.state ? (STATES?.[VIEW.state]?.name || VIEW.state) : "";
+  const coName = VIEW.county ? countyName(VIEW.county) : "";
+  const place = coName ? `${coName}, ${VIEW.state}` : stName;
   /* Announced, not shown: the two pills beside it say the same thing to the
      eye, and this says it to a screen reader when a filter changes. */
-  $("scope-label").textContent = VIEW.net && VIEW.state ? `${VIEW.net} · ${stName}`
-    : VIEW.net || (VIEW.state ? stName : "All networks · every state");
+  $("scope-label").textContent = VIEW.net && VIEW.state ? `${VIEW.net} · ${place}`
+    : VIEW.net || (VIEW.state ? place : "All networks · every state");
   safe("scope", () => {
     $("scope-clear").hidden = !VIEW.net && !VIEW.state;
     $("state-pick").classList.toggle("is-set", !!VIEW.state);
     $("reset-view").hidden = !VIEW.state;
     $("net-pick").classList.toggle("is-set", !!VIEW.net);
     $("net-clear").hidden = !VIEW.net;
+    const cp = $("county-pick");
+    if (cp) {
+      cp.hidden = !VIEW.county;
+      $("county-chip").textContent = coName || "";
+    }
     const chip = $("net-chip");
     chip.innerHTML = VIEW.net ? `${brandMark(VIEW.net)}<span>${esc(VIEW.net)}</span>` : "All networks";
     chip.title = VIEW.net ? "Choose a different network from the list" : "Choose a network from the list";
@@ -1159,18 +1250,23 @@ function render(M) {
     map.setAttribute("dots", VIEW.dots);
     map.setAttribute("brand", VIEW.net || "");
     map.setAttribute("focus", VIEW.state || "");
+    map.setAttribute("county", VIEW.county || "");
     const wait = $("map-wait");
     if (wait) wait.hidden = !!STATES;
     if (wait && !STATES) wait.textContent = "State outlines did not load — the map cannot draw.";
   });
 
-  $("map-title").textContent = VIEW.state ? stName : METRIC_TITLE[VIEW.mapMetric];
+  const hasCounties = !!(VIEW.state && COUNTIES[VIEW.state]);
+  $("map-title").textContent = VIEW.county ? place : VIEW.state ? stName : METRIC_TITLE[VIEW.mapMetric];
   $("map-sub").textContent = VIEW.state
-    ? `${VIEW.net ? VIEW.net + " · " : ""}${nf(S.length)} sites here, ${nf(missing)} of them missing from the map. Every dot is one site — hover for its network.`
+    ? `${VIEW.net ? VIEW.net + " · " : ""}${nf(S.length)} sites here, ${nf(missing)} of them missing from the map. ` +
+      (VIEW.county || !hasCounties ? "Every dot is one site — click one to open it." : "Shading is the county figure; every dot is one site.")
     : `${VIEW.net ? VIEW.net + ": " : ""}${nf(S.length)} sites, ${nf(missing)} missing. Shading is the state figure; dots are the sites themselves.`;
-  $("map-hint").textContent = VIEW.state
-    ? "Click outside the state to zoom back out"
-    : "Click a state to zoom into its sites";
+  $("map-hint").textContent = VIEW.county
+    ? `Click a site to open it · click another county to move, or outside ${stName} to zoom out`
+    : VIEW.state
+      ? `Click a site to open it${hasCounties ? " · click a county to zoom into it" : ""} · click outside the state to zoom out`
+      : "Click a state to zoom into its sites";
   safe("level 2 switch", () => {
     const sw = $("l2-toggle");
     if (sw) { sw.setAttribute("aria-checked", String(!!M.l2)); sw.classList.toggle("is-on", !!M.l2); }
@@ -1237,7 +1333,7 @@ function render(M) {
   safe("networks table", () => renderNetworks(Sstate, ranked));
 
   $("view-note").textContent = VIEW.state
-    ? `Every figure on this page is for ${stName}.`
+    ? `Every figure on this page is for ${place}.`
     : "";
 
   const D = M.dedupe;
@@ -1925,7 +2021,8 @@ const round6 = (v) => Math.round(v * 1e6) / 1e6;
 
 const missingHere = () => (MERGED?.sites || []).filter((s) =>
   !s.osm && s.lat != null && s.lon != null &&
-  (!VIEW.state || s.state === VIEW.state) && (!VIEW.net || s.net === VIEW.net));
+  (!VIEW.state || s.state === VIEW.state) && (!VIEW.county || s.county === VIEW.county) &&
+  (!VIEW.net || s.net === VIEW.net));
 
 function downloadMissing() {
   const rows = missingHere();
@@ -2151,14 +2248,7 @@ function renderOpenings(S) {
   /* Every row goes somewhere: an unmapped site opens the editor standing on it,
      a mapped one opens what OpenStreetMap already holds. */
   for (const b of host.querySelectorAll("[data-at]")) {
-    b.onclick = () => {
-      const hit = rows[Number(b.dataset.at)]?.s;
-      if (!hit) return;
-      if (hit.osm && hit.osmId) {
-        const type = { n: "node", w: "way", r: "relation" }[hit.osmId[0]];
-        window.open(`https://www.openstreetmap.org/${type}/${hit.osmId.slice(1)}`, "_blank", "noopener");
-      } else if (window.ImproveAt) window.ImproveAt(hit);
-    };
+    b.onclick = () => openSite(rows[Number(b.dataset.at)]?.s);
   }
 }
 
@@ -2373,6 +2463,9 @@ async function setLevel2(on) {
     // a network or state that exists only with Level 2 in cannot stay selected without it
     if (VIEW.net && !MERGED.sites.some((s) => s.net === VIEW.net)) VIEW.net = null;
     if (VIEW.state && !MERGED.sites.some((s) => s.state === VIEW.state)) VIEW.state = null;
+    // a new merge is new site objects, which have not been told their county yet
+    if (VIEW.state && COUNTIES[VIEW.state]) assignCounties(MERGED.sites, VIEW.state, COUNTIES[VIEW.state]);
+    if (!VIEW.state) VIEW.county = null;
     initControls();
     render(MERGED);
   } finally {
@@ -2398,10 +2491,23 @@ function initControls() {
      means and a single repaint behind it. */
   sel.onchange = () => {
     VIEW.state = sel.value || null;
+    VIEW.county = null;
     $("reset-view").hidden = !VIEW.state;
+    ATLAS_DIRTY = true;
     render(MERGED);
+    /* Counties after the first paint, so the state opens at once and the
+       boundaries arrive a moment later rather than holding it up. */
+    const st = VIEW.state;
+    if (st) loadCounties(st).then((list) => {
+      if (!list || VIEW.state !== st) return;
+      assignCounties(MERGED.sites, st, list);
+      ATLAS_DIRTY = true;
+      render(MERGED);
+    });
   };
   $("reset-view").onclick = () => { sel.value = ""; sel.onchange(); };
+  const cc = $("county-clear");
+  if (cc) cc.onclick = () => { VIEW.county = null; render(MERGED); };
 
   /* Assigned rather than added: this runs again on every refresh, and stacked
      listeners would repaint the board once per refresh on each click. */
@@ -2446,7 +2552,19 @@ function initControls() {
   if (map && !map._wired) {
     map._wired = true;
     map.addEventListener("map-pick", (e) => {
-      const code = e.detail.code;
+      const { code, county, site } = e.detail;
+      /* A dot is a site, and opens: the editor where it is missing, its page
+         on OpenStreetMap where it is mapped. This used to fall through to the
+         state click below — the dot was inside the open state, so clicking it
+         read as "this state again" and zoomed out. */
+      if (site != null) { openSite(ATLAS_ROWS[site]); return; }
+      if (county) {
+        // the open county again zooms back out to its state, as a state does
+        VIEW.county = county === VIEW.county ? null : county;
+        render(MERGED);
+        return;
+      }
+      if (VIEW.county && code === VIEW.state) { VIEW.county = null; render(MERGED); return; }
       sel.value = code && code !== VIEW.state ? code : "";
       sel.onchange();
     });

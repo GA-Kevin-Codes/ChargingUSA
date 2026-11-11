@@ -17,6 +17,15 @@ whole palette is the block of custom properties at the top of `index.html`;
 the map and the editor paint their canvases from the same tokens, so change a
 value there rather than in the scripts.
 
+## The map
+
+Click a state to open it, then a county to open that; click outside to step
+back out. Inside a state the shading is by county. A dot is a site: clicking
+one opens the editor on it if it is missing from OpenStreetMap, or its page
+on openstreetmap.org if it is mapped. County boundaries are the Census
+Bureau's (2017 cartographic edition, via `us-atlas`), one file per state in
+`data/counties/`, built by `bun tools/build-counties.js`.
+
 ## Level 2
 
 The board is about fast charging by default. The **Level 2** switch adds

@@ -2324,6 +2324,7 @@ const canItemise = (s) => siteInventory(s).kinds.length > 0;
 function upgrades() {
   return upgradePool()
     .filter((s) => !VIEW.state || s.state === VIEW.state)
+    .filter((s) => !VIEW.county || s.county === VIEW.county)
     .filter((s) => openedWithin(s, VIEW.impOpen))
     // the widest gap between what is mapped and what is there, first
     .sort((a, b) => unitCount(b) - unitCount(a));
@@ -3399,6 +3400,7 @@ function bringBack(sites) {
 function candidates() {
   return candidatePool()
     .filter((s) => !VIEW.state || s.state === VIEW.state)
+    .filter((s) => !VIEW.county || s.county === VIEW.county)
     .filter((s) => openedWithin(s, VIEW.impOpen))
     // newest first when a window is asked for, biggest hole otherwise
     .sort((a, b) => VIEW.impOpen != null
@@ -3648,7 +3650,7 @@ function paintModes() {
 function paintProgress() {
   const p = $("imp-progress");
   if (!p) return;
-  const scope = [VIEW.net, VIEW.state].filter(Boolean).join(" · ");
+  const scope = [VIEW.net, VIEW.county ? `${countyName(VIEW.county)}, ${VIEW.state}` : VIEW.state].filter(Boolean).join(" · ");
   const done = CUR.saved ? ` · <span class="imp-saved">${nf(CUR.saved)} added this session</span>` : "";
   /* Said out loud, because a queue that advances by itself with no explanation
      reads as a glitch. These are sites somebody had already asked about. */
@@ -4817,7 +4819,11 @@ async function openAt(site) {
   // an unmapped site of any age must not be filtered out from under the click
   VIEW.impOpen = null;
   await open();
-  if (!CUR.queue.length) return;
+  /* An empty queue is not a reason to show nothing. The site asked for may be
+     the only one in view and hidden — skipped or noted in this browser — and
+     it was asked for by name, so it is shown regardless, the same as below.
+     Only a panel still waiting on sign-in has nothing to show it on. */
+  if (!CUR.site && !CUR.queue.length && !(session() && clientId())) return;
   const at = CUR.queue.findIndex((q) => q === site
     || (q.lat === site.lat && q.lon === site.lon && q.net === site.net));
   if (at >= 0) { CUR.at = at; show(); }
