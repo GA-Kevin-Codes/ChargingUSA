@@ -7,6 +7,16 @@ The board is static: open `index.html` and it reads the saved payloads in
 `data/`. `tools/` refreshes those payloads and runs hourly from GitHub Actions —
 OpenStreetMap incrementally every hour, the slower sources once a day.
 
+## The look
+
+The board is drawn as a road atlas, and colour means what a highway sign makes
+it mean: guide green is *on the map*, work-zone orange is *missing*, service
+blue is something you can do. It follows the system between a paper ground by
+day and asphalt by night, and the button in the header overrides that. The
+whole palette is the block of custom properties at the top of `index.html`;
+the map and the editor paint their canvases from the same tokens, so change a
+value there rather than in the scripts.
+
 ## Sources
 
 | | |

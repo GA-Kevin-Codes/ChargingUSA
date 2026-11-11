@@ -1120,7 +1120,7 @@ class TileMap {
     cv.style.width = `${W}px`; cv.style.height = `${H}px`;
     const ctx = cv.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = cssv("--sunken");
+    ctx.fillStyle = cssv("--imagery-void");
     ctx.fillRect(0, 0, W, H);
 
     const L = this.layer;
@@ -1155,11 +1155,11 @@ class TileMap {
     if (this.drawOthers) this.drawOthers(ctx, this);
     else for (const o of this.others) {
       const [x, y] = this.toPx(o.lat, o.lon);
-      ctx.strokeStyle = cssv("--s3");
+      ctx.strokeStyle = cssv("--pin-ok");
       ctx.fillStyle = "rgba(0,0,0,.35)";
       ctx.lineWidth = 2.4;
       ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.284); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.arc(x, y, 2.4, 0, 6.284); ctx.fillStyle = cssv("--s3"); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, 2.4, 0, 6.284); ctx.fillStyle = cssv("--pin-ok"); ctx.fill();
     }
 
     /* Every source's own coordinate for this site, so a disagreement between
@@ -1169,12 +1169,12 @@ class TileMap {
        imagery shows. Drawn as crosses: the pin is a place, these are claims. */
     if (this.refs?.length && this.pin) {
       const p = this.toPx(this.pin.lat, this.pin.lon);
-      ctx.font = "600 9px 'IBM Plex Mono', monospace";
+      ctx.font = "600 9.5px 'Overpass Mono', monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "bottom";
       for (const r of this.refs) {
         const [x, y] = this.toPx(r.lat, r.lon);
-        ctx.strokeStyle = cssv("--s4");
+        ctx.strokeStyle = cssv("--pin-warn");
         ctx.setLineDash([3, 3]); ctx.lineWidth = 1.1;
         ctx.globalAlpha = 0.55;
         ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(p[0], p[1]); ctx.stroke();
@@ -1189,7 +1189,7 @@ class TileMap {
           ctx.fillStyle = "rgba(14,13,13,.72)";
           const w = ctx.measureText(r.label).width + 6;
           ctx.fillRect(x - w / 2, y - 18, w, 11);
-          ctx.fillStyle = cssv("--s4");
+          ctx.fillStyle = cssv("--pin-warn");
           ctx.fillText(r.label, x, y - 8);
         }
       }
@@ -1197,7 +1197,7 @@ class TileMap {
       // one source, so there is nothing to compare — the original single mark
       const g = this.toPx(this.ghost.lat, this.ghost.lon);
       const p = this.toPx(this.pin.lat, this.pin.lon);
-      ctx.strokeStyle = cssv("--s4");
+      ctx.strokeStyle = cssv("--pin-warn");
       ctx.setLineDash([4, 4]); ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.moveTo(g[0], g[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
       ctx.setLineDash([]);
@@ -1212,7 +1212,7 @@ class TileMap {
     ctx.save();
     ctx.translate(x, y);
     ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
-    ctx.fillStyle = cssv("--accent");
+    ctx.fillStyle = cssv("--pin");
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.bezierCurveTo(-9, -8, -11, -16, -11, -20);
@@ -1220,10 +1220,10 @@ class TileMap {
     ctx.bezierCurveTo(11, -16, 9, -8, 0, 0);
     ctx.fill();
     ctx.shadowColor = "transparent";
-    ctx.fillStyle = cssv("--surface");
+    ctx.fillStyle = cssv("--pin-core");
     ctx.beginPath(); ctx.arc(0, -20, 4.2, 0, 6.284); ctx.fill();
     // the point of the pin is the coordinate, so mark it exactly
-    ctx.strokeStyle = cssv("--accent"); ctx.lineWidth = 1;
+    ctx.strokeStyle = cssv("--pin"); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(-5, 0); ctx.lineTo(5, 0); ctx.stroke();
     ctx.restore();
   }
@@ -1234,17 +1234,22 @@ class TileMap {
     const pow = 10 ** Math.floor(Math.log10(target));
     const nice = [1, 2, 5, 10].find((k) => k * pow >= target) * pow;
     const px = nice / mPerPx;
-    ctx.strokeStyle = cssv("--ink");
-    ctx.fillStyle = cssv("--ink");
-    ctx.globalAlpha = 0.75;
+    /* The scale sits on imagery, which is dark whatever the page is doing, so
+       it takes the imagery tokens rather than the page's ink — and a shadow,
+       because a white bar over a white roof is no scale at all. */
+    ctx.strokeStyle = cssv("--pin-ink");
+    ctx.fillStyle = cssv("--pin-ink");
+    ctx.shadowColor = "rgba(0,0,0,.8)"; ctx.shadowBlur = 3;
+    ctx.globalAlpha = 0.95;
     ctx.lineWidth = 2;
     const y = H - 16, x = 14;
     ctx.beginPath();
     ctx.moveTo(x, y - 5); ctx.lineTo(x, y); ctx.lineTo(x + px, y); ctx.lineTo(x + px, y - 5);
     ctx.stroke();
-    ctx.font = '11px "IBM Plex Mono", monospace';
+    ctx.font = '600 11px "Overpass Mono", monospace';
     ctx.fillText(nice >= 1000 ? `${nice / 1000} km` : `${nice} m`, x + px + 7, y + 1);
     ctx.globalAlpha = 1;
+    ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
   }
 }
 
@@ -1884,8 +1889,8 @@ function drawUpgrade(ctx, map) {
     ctx.beginPath();
     ring.forEach((p, i) => { const [x, y] = map.toPx(p.lat, p.lon); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
     if (ring.length > 2) ctx.closePath();
-    ctx.fillStyle = "rgba(168,81,42,.18)";
-    ctx.strokeStyle = cssv("--accent");
+    ctx.fillStyle = "rgba(255,122,26,.2)";
+    ctx.strokeStyle = cssv("--pin");
     ctx.lineWidth = 2;
     if (ring.length > 2) ctx.fill();
     ctx.stroke();
@@ -1893,16 +1898,16 @@ function drawUpgrade(ctx, map) {
     for (const p of u.ring) {
       const [x, y] = map.toPx(p.lat, p.lon);
       ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 6.284);
-      ctx.fillStyle = cssv("--accent"); ctx.fill();
+      ctx.fillStyle = cssv("--pin"); ctx.fill();
     }
   }
   u.pts.forEach((p, i) => {
     const [x, y] = map.toPx(p.lat, p.lon);
     ctx.beginPath(); ctx.arc(x, y, 8, 0, 6.284);
     ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fill();
-    ctx.strokeStyle = cssv("--s1"); ctx.lineWidth = 2.2; ctx.stroke();
-    ctx.fillStyle = cssv("--s1");
-    ctx.font = "600 10px 'IBM Plex Mono', monospace";
+    ctx.strokeStyle = cssv("--pin-info"); ctx.lineWidth = 2.2; ctx.stroke();
+    ctx.fillStyle = cssv("--pin-info");
+    ctx.font = "600 10px 'Overpass Mono', monospace";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(String(i + 1), x, y);
   });
@@ -1914,17 +1919,17 @@ function drawUpgrade(ctx, map) {
     const grabbable = o.kind === "point" && o.type === "node";
     if (o.moved) {
       const h = map.toPx(o.home.lat, o.home.lon);
-      ctx.strokeStyle = cssv("--s4");
+      ctx.strokeStyle = cssv("--pin-warn");
       ctx.setLineDash([4, 4]); ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.moveTo(h[0], h[1]); ctx.lineTo(x, y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.beginPath(); ctx.arc(h[0], h[1], 3.5, 0, 6.284); ctx.stroke();
     }
-    ctx.strokeStyle = cssv(o.moved ? "--accent" : "--s3");
+    ctx.strokeStyle = cssv(o.moved ? "--pin" : "--pin-ok");
     ctx.lineWidth = 2.4;
     ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.284); ctx.stroke();
     if (grabbable) {
-      ctx.fillStyle = cssv(o.moved ? "--accent" : "--s3");
+      ctx.fillStyle = cssv(o.moved ? "--pin" : "--pin-ok");
       ctx.beginPath(); ctx.arc(x, y, 2.2, 0, 6.284); ctx.fill();
     }
   }
@@ -2660,6 +2665,7 @@ const ICON = {
   globe: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/></svg>`,
   pin: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3z"/></svg>`,
   close: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+  back: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>`,
 };
 
 const CUR = { site: null, tags: null, pin: null, layers: [], layer: null, near: [], queue: [], at: 0, busy: false, saved: 0 };
@@ -2680,7 +2686,8 @@ function shell() {
   root.innerHTML = `
     <div class="imp-bar">
       <div class="imp-bar-left">
-        <div>
+        <button class="imp-back" id="imp-quit" title="Back to the board (Esc)" aria-label="Back to the board">${ICON.back}Board</button>
+        <div class="imp-title">
           <div class="eyebrow">Make improvements</div>
           <div class="imp-progress" id="imp-progress"></div>
         </div>
@@ -2702,7 +2709,6 @@ function shell() {
       </div>
       <div class="imp-bar-right">
         <span class="imp-who" id="imp-who"></span>
-        <button class="icon-btn" id="imp-quit" title="Close" aria-label="Close">${ICON.close}</button>
       </div>
     </div>
     <div class="imp-body">
@@ -3508,7 +3514,7 @@ function paintWho() {
   if (!who) return;
   const s = session();
   who.innerHTML = s
-    ? `<span class="mono">${esc(s.user)}</span>${envKey() === "dev" ? ` <span class="chip" style="color:var(--s4)">sandbox</span>` : ""}
+    ? `<span class="mono">${esc(s.user)}</span>${envKey() === "dev" ? ` <span class="chip" style="color:var(--warn)">sandbox</span>` : ""}
        <button class="imp-link" id="imp-out">sign out</button>`
     : "";
   who.querySelector("#imp-out")?.addEventListener("click", signOut);
@@ -4002,6 +4008,8 @@ async function open() {
   root.hidden = false;
   document.body.classList.add("is-improving");
   paintWho();
+  // before sign-in too, so the switch never sits with neither side selected
+  paintModes();
   paintSide();
   MAP.schedule();
   addEventListener("keydown", keys);

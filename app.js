@@ -65,7 +65,15 @@ const MONO_HUES = [210, 24, 158, 42, 280, 340, 190, 100];
 function brandMark(name) {
   const src = BRANDS?.brands?.[name]?.icon;
   if (src) {
-    return `<img class="bmark" src="${src}" alt="" loading="lazy" decoding="async">`;
+    /* brands.json names the `-dark` file wherever one exists — the mark redrawn
+       in white for a dark ground. The board has a day side now, so both are
+       emitted and the stylesheet shows whichever suits the ground it is on;
+       the base file is the same name without the suffix. A mark with only one
+       drawing is used on both. */
+    const night = /-dark\.svg$/.test(src);
+    if (!night) return `<img class="bmark" src="${src}" alt="" loading="lazy" decoding="async">`;
+    return `<img class="bmark bmark--day" src="${src.replace(/-dark\.svg$/, ".svg")}" alt="" decoding="async">` +
+           `<img class="bmark bmark--night" src="${src}" alt="" decoding="async">`;
   }
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -132,7 +140,10 @@ const VIEW = { state: null, net: null, selected: null, metric: "pop", zoom: 1, p
                stateOrder: "pct",
                // the atlas: which figure shades the states, which sites show as
                // dots, and the rail's filter box
-               mapMetric: "mapped", dots: "both", query: "", stateQuery: "" };
+               mapMetric: "mapped", dots: "both", query: "", stateQuery: "",
+               // which list the panel beside the map shows, where there is only
+               // room for one
+               browse: "states" };
 let MERGED = null;
 
 const CONUS = { lat0: 24, lat1: 50, lon0: -125, lon1: -66 };
@@ -148,7 +159,7 @@ function safe(label, fn) {
 }
 window.addEventListener("error", (e) => {
   const s = document.getElementById("status");
-  if (s) s.innerHTML = `<span class="chip" style="color:var(--s2)">script error</span> ${e.message}`;
+  if (s) { s.innerHTML = `<span class="chip" style="color:var(--miss)">script error</span>`; s.append(e.message); }
 });
 
 const nf = (n) => n.toLocaleString("en-US");
@@ -767,32 +778,6 @@ function countUp(node, text) {
   requestAnimationFrame(step);
 }
 
-function bars(hostId, rows, color, labelW, opts = {}) {
-  const host = $(hostId);
-  host.innerHTML = "";
-  const max = Math.max(...rows.map((r) => r[1]), 1);
-  for (const [label, val, sub, key] of rows) {
-    const r = el("div", "fn-row" + (opts.onPick ? " is-pickable" : "") + (opts.active && key === opts.active ? " is-active" : ""));
-    if (opts.onPick && key) {
-      r.tabIndex = 0;
-      r.setAttribute("role", "button");
-      r.addEventListener("click", () => opts.onPick(key));
-      r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); opts.onPick(key); } });
-    }
-    if (labelW) r.style.gridTemplateColumns = `${labelW} 1fr auto`;
-    r.append(el("div", "fn-label", label));
-    const track = el("div", "fn-track"), fill = el("div", "fn-fill");
-    const pct = `${Math.max(1.2, (val / max) * 100).toFixed(1)}%`;
-    fill.style.background = color;
-    // width starts at 0 (stylesheet); set it next frame so the transition runs
-    requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = pct; }));
-    track.append(fill);
-    r.append(track, el("div", "fn-val num", nf(val)));
-    if (sub) r.title = sub;
-    host.append(r);
-  }
-}
-
 /* Everything the atlas needs, packed from the merge rather than fetched.
 
    The design's own copy of this map read three files it had generated from a
@@ -887,13 +872,24 @@ function render(M) {
 
   FAILED.length = 0;
 
-  /* ---- top bar ---- */
+  /* ---- scope ---- */
   $("prov").innerHTML =
     `<b>${nf(S.length)}</b> sites · <b>${nf(ports)}</b> DC ports · ${esc(shortStamp(M.stamps))}`;
   const stName = VIEW.state ? (STATES?.[VIEW.state]?.name || VIEW.state) : "";
+  /* Announced, not shown: the two pills beside it say the same thing to the
+     eye, and this says it to a screen reader when a filter changes. */
   $("scope-label").textContent = VIEW.net && VIEW.state ? `${VIEW.net} · ${stName}`
     : VIEW.net || (VIEW.state ? stName : "All networks · every state");
-  $("scope-clear").hidden = !VIEW.net && !VIEW.state;
+  safe("scope", () => {
+    $("scope-clear").hidden = !VIEW.net && !VIEW.state;
+    $("state-pick").classList.toggle("is-set", !!VIEW.state);
+    $("reset-view").hidden = !VIEW.state;
+    $("net-pick").classList.toggle("is-set", !!VIEW.net);
+    $("net-clear").hidden = !VIEW.net;
+    const chip = $("net-chip");
+    chip.innerHTML = VIEW.net ? `${brandMark(VIEW.net)}<span>${esc(VIEW.net)}</span>` : "All networks";
+    chip.title = VIEW.net ? "Choose a different network from the list" : "Choose a network from the list";
+  });
 
   /* ---- the atlas ---- */
   safe("atlas", () => {
@@ -930,27 +926,38 @@ function render(M) {
   const pct = S.length ? (mapped / S.length) * 100 : null;
   // mapped in this browser, not yet visible in the snapshot behind the figures
   const localHere = S.filter((s) => s.osmLocal).length;
+  /* Coverage leads, because it is the question the board exists to answer;
+     the gap comes second, because it is the work. The other three are context.
+     Each is a sign: guide green for what is on the map, work-zone orange for
+     what is not, plain for plain facts. */
   const kpis = [
-    ["Sites", nf(S.length), VIEW.net || VIEW.state ? "in this slice" : "public DC fast charging", ""],
-    ["DC ports", nf(ports), S.length ? `${(ports / S.length).toFixed(1)} per site` : "—", ""],
     /* The sub-line owns up to the overlay. A figure that quietly counted work
        the snapshot cannot see would be the kind of number you stop trusting
        once you notice — better to show it and say where it came from. */
-    ["On the map", pct == null ? "—" : `${pct.toFixed(1)}%`,
-     `${nf(mapped)} of ${nf(S.length)}${localHere ? ` · ${nf(localHere)} awaiting refresh` : ""}`, ""],
-    ["Missing", nf(missing), "no station on OSM", "var(--accent)"],
+    ["guide", "On the map", pct == null ? "—" : `${pct.toFixed(1)}%`,
+     `${nf(mapped)} of ${nf(S.length)} sites${localHere ? ` · ${nf(localHere)} awaiting refresh` : ""}`, pct],
+    ["work", "Missing", nf(missing), "no station on OSM"],
+    ["plain", "Sites", nf(S.length), VIEW.net || VIEW.state ? "in this slice" : "public DC fast charging"],
+    ["plain", "DC ports", nf(ports), S.length ? `${(ports / S.length).toFixed(1)} per site` : "—"],
     VIEW.net
-      ? ["Share of US ports", `${((ports / nationalPorts) * 100).toFixed(1)}%`, `of ${nf(nationalPorts)}`, "var(--ink-2)"]
-      : ["Networks", nf(nationalNets), `${nf(bigNets)} carry 100+ ports`, "var(--ink-2)"],
+      ? ["plain", "Share of US ports", `${((ports / nationalPorts) * 100).toFixed(1)}%`, `of ${nf(nationalPorts)}`]
+      : ["plain", "Networks", nf(nationalNets), `${nf(bigNets)} carry 100+ ports`],
   ];
   const kw = $("kpis");
   kw.innerHTML = "";
-  for (const [label, value, sub, tone] of kpis) {
-    const k = el("div", "ab-kpi");
-    const v = el("div", "ab-kpi-val");
-    if (tone) v.style.color = tone;
+  for (const [kind, label, value, sub, bar] of kpis) {
+    const k = el("div", `sign sign--${kind}`);
+    const v = el("div", "sign-val");
     countUp(v, value);
-    k.append(el("div", "ab-kpi-label", label), v, el("div", "ab-kpi-sub", sub));
+    k.append(el("div", "sign-label", label), v);
+    if (kind === "guide") {
+      const track = el("div", "sign-bar"), fill = el("span");
+      track.append(fill);
+      k.append(track);
+      // width starts at 0 (stylesheet); set it next frame so the transition runs
+      requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = `${(bar || 0).toFixed(1)}%`; }));
+    }
+    k.append(el("div", "sign-sub", esc(sub)));
     kw.append(k);
   }
 
@@ -981,14 +988,17 @@ function render(M) {
   if (xn) xn.innerHTML = "";
 
   $("status").innerHTML = FAILED.length
-    ? `<span class="chip" style="color:var(--s2)">${FAILED.length} failed</span> ${FAILED.join("; ")}`
+    ? `<span class="chip" style="color:var(--miss)">${FAILED.length} failed</span> ${esc(FAILED.join("; "))}`
     : freshness(M.stamps);
+  const bad = $("load-error");
+  if (bad) bad.hidden = true;
 }
 
-/* The rail: every network, its share of its own sites already on the map, and
-   the filter box the design puts above them. Not `bars()` — this row carries
-   the bar underneath the name rather than beside it, so a long operator name
-   is not squeezed into a third of the width. */
+/* The network list: every network in the current state, ranked by DC ports,
+   with the share of its own sites already on the map as a bar underneath. The
+   bar sits under the name rather than beside it so a long operator name is
+   not squeezed into a third of the width, and the percentage is printed next
+   to it because a bar alone asks the reader to estimate. */
 function renderRail(ranked, nets) {
   const host = $("netrail");
   if (!host) return;
@@ -997,19 +1007,23 @@ function renderRail(ranked, nets) {
   const all = $("net-all");
   if (all) {
     all.textContent = `All ${nf(ranked.length)}`;
-    all.classList.toggle("is-off", !!VIEW.net);
+    all.hidden = !VIEW.net;
   }
+  const tab = $("tab-nets");
+  if (tab) tab.innerHTML = `Networks <small>${nf(ranked.length)}</small>`;
   host.innerHTML = rows.length
     ? rows.map(([n, [c, p, m]]) => {
         const share = c ? Math.round((m / c) * 100) : 0;
-        return `<button class="ab-net${n === VIEW.net ? " is-on" : ""}" data-net="${esc(n)}"
+        const on = n === VIEW.net;
+        return `<button class="row${on ? " is-on" : ""}" data-net="${esc(n)}" aria-pressed="${on}"
                   title="${esc(n)} — ${nf(m)} of ${nf(c)} sites on the map, ${nf(p)} ports">
-          <span class="ab-net-name">${brandMark(n)}${esc(n)}</span>
-          <span class="ab-net-n num">${nf(p)}</span>
-          <span class="ab-net-track"><span class="ab-net-fill" style="width:${share}%"></span></span>
+          <span class="row-name">${brandMark(n)}<span>${esc(n)}</span></span>
+          <span class="row-fig">${nf(p)}</span>
+          <span class="row-track"><span class="row-fill" style="width:${share}%"></span></span>
+          <span class="row-sub">${share}% mapped</span>
         </button>`;
       }).join("")
-    : `<p class="ab-empty">No network matches that.</p>`;
+    : `<p class="empty">No network matches that.</p>`;
   for (const b of host.querySelectorAll("[data-net]")) {
     b.onclick = () => {
       VIEW.net = VIEW.net === b.dataset.net ? null : b.dataset.net;
@@ -1033,7 +1047,7 @@ function renderMethod(M, S) {
     ...(M.localMapped ? [["Mapped here, awaiting refresh", nf(M.localMapped)]] : []),
   ];
   host.innerHTML = rows.map(([k, v]) =>
-    `<div class="ab-method-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
+    `<div class="fact"><span>${esc(k)}</span><i></i><b>${esc(v)}</b></div>`).join("");
 }
 
 /* What the refresh button actually did, said plainly.
@@ -1052,7 +1066,7 @@ function reportRefresh(rebuild, before, merged) {
   if (!status) return;
   if (rebuild.local && rebuild.ok === false) {
     status.innerHTML =
-      `<span class="chip" style="color:var(--s2)">not refreshed</span> ` +
+      `<span class="chip" style="color:var(--miss)">not refreshed</span> ` +
       `${esc(rebuild.note || "the rebuild failed")} — the figures are the previous snapshot.`;
     return;
   }
@@ -1063,7 +1077,7 @@ function reportRefresh(rebuild, before, merged) {
   if (btn) btn.title = "Check for newly published data";
   const changed = before && before !== JSON.stringify(merged.stamps);
   status.innerHTML = changed
-    ? `<span class="chip" style="color:var(--s3)">updated</span> ${freshness(merged.stamps)}`
+    ? `<span class="chip" style="color:var(--ok)">updated</span> ${freshness(merged.stamps)}`
     : `<span class="chip">already current</span> ${freshness(merged.stamps)}`;
 }
 
@@ -1368,16 +1382,23 @@ function renderStateCoverage(sites) {
       : `Least mapped first. Bar and figure are the share already mapped; states under ${STATE_MIN_SITES} sites are greyed, being too small to rank.`;
   }
 
+  const tab = $("tab-states");
+  if (tab) tab.innerHTML = `States <small>${nf(agg.size)}</small>`;
+
+  /* The figure the list is ordered by leads; the other one sits beside the
+     bar, so neither order hides what the other would have shown. */
+  const byGap = VIEW.stateOrder === "gap";
   host.innerHTML = rows.length
     ? rows.map((r) => `
-      <button class="ab-state${r.code === VIEW.state ? " is-on" : ""}${r.n < STATE_MIN_SITES ? " is-thin" : ""}"
-              data-state="${r.code}"
+      <button class="row${r.code === VIEW.state ? " is-on" : ""}${r.n < STATE_MIN_SITES ? " is-thin" : ""}"
+              data-state="${r.code}" aria-pressed="${r.code === VIEW.state}"
               title="${esc(r.name)} — ${nf(r.m)} of ${nf(r.n)} mapped, ${nf(r.gap)} missing, ${nf(r.ports)} ports">
-        <span class="ab-state-name"><span class="ab-state-code">${r.code}</span>${esc(r.name)}</span>
-        <span class="ab-state-n">${VIEW.stateOrder === "gap" ? nf(r.gap) : Math.round(r.pct) + "%"}</span>
-        <span class="ab-state-track"><span class="ab-state-fill" style="width:${r.pct.toFixed(1)}%"></span></span>
+        <span class="row-name"><span class="code">${r.code}</span><span>${esc(r.name)}</span></span>
+        <span class="row-fig">${byGap ? nf(r.gap) : Math.round(r.pct) + "%"}</span>
+        <span class="row-track"><span class="row-fill" style="width:${r.pct.toFixed(1)}%"></span></span>
+        <span class="row-sub">${byGap ? Math.round(r.pct) + "% mapped" : nf(r.gap) + " missing"}</span>
       </button>`).join("")
-    : `<p class="ab-empty">No state matches that.</p>`;
+    : `<p class="empty">No state matches that.</p>`;
 
   for (const b of host.querySelectorAll("[data-state]")) {
     b.onclick = () => {
@@ -1408,6 +1429,8 @@ const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0
    `new Date("2026-08-24")` is midnight UTC, which is the 23rd everywhere in the
    US. Appending the time keeps it on its own day. */
 const OPEN_DAYS = 30;
+// how many of them the queue lists; the note above it says when there are more
+const OPEN_SHOWN = 14;
 
 function openedWithinDays(s, days) {
   if (!s.open) return false;
@@ -1440,26 +1463,35 @@ function renderOpenings(S) {
   const natRecent = MERGED.sites.filter((s) => openedWithinDays(s, 30));
   const natMapped = natRecent.filter((s) => s.osm).length;
 
+  const shown = rows.slice(0, OPEN_SHOWN);
   const note = $("open-note");
   if (note) {
     note.textContent =
       `${nf(rows.length)} of ${nf(natRecent.length)} recent openings` +
       `${VIEW.net || VIEW.state ? " in this slice" : ""} · ` +
-      `${nf(natMapped)} of ${nf(natRecent.length)} nationally are already mapped`;
+      `${nf(natMapped)} of ${nf(natRecent.length)} nationally are already mapped` +
+      (rows.length > shown.length ? ` · newest ${nf(shown.length)} shown` : "");
   }
 
+  /* The last cell says what a click does as well as what the site's state is:
+     the arrow on "Missing" leads into the editor, the one on "On map" leads
+     out to the element. A word and an icon, so the difference does not rest
+     on colour. */
+  const go = `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
+  const out = `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 16 17 7M9 7h8v8"/></svg>`;
   host.innerHTML = !rows.length
-    ? `<p class="ab-empty">Nothing opened in this slice in the last 30 days.
+    ? `<p class="empty">Nothing opened in this slice in the last 30 days.
         Clear the network or the state to widen it.</p>`
-    : rows.slice(0, 14).map(({ s, d }, i) => `
-      <button class="ab-openrow" data-at="${i}"
+    : shown.map(({ s, d }, i) => `
+      <button class="qrow" data-at="${i}"
               title="${s.osm ? `Open ${esc(s.osmId || "it")} on OpenStreetMap` : "Map this site"}">
         <span class="num">${iso(d).slice(5)}</span>
-        <span>${esc(s.net)}</span>
-        <span class="ab-openrow-name">${esc(s.name || "—")}</span>
-        <span class="num">${esc(s.state || "—")}</span>
-        <span class="num">${nf(s.ports || 0)} pt</span>
-        <span class="${s.osm ? "ab-openrow-on" : "ab-openrow-off"}">${s.osm ? "on map" : "missing"}</span>
+        <span class="q-net">${brandMark(s.net)}<span>${esc(s.net)}</span></span>
+        <span class="q-name">${esc(s.name || "—")}</span>
+        <span class="code">${esc(s.state || "—")}</span>
+        <span class="num q-ports">${nf(s.ports || 0)} pt</span>
+        ${s.osm ? `<span class="st st--on">On map ${out}</span>`
+                : `<span class="st st--off">Missing ${go}</span>`}
       </button>`).join("");
 
   /* Every row goes somewhere: an unmapped site opens the editor standing on it,
@@ -1505,18 +1537,22 @@ function renderNetworks(S, ranked) {
   shown.forEach(([net], i) => {
     const e = stat.get(net);
     const [spider, state] = SPIDERS[net] || [];
+    /* Said in words as well as a dot: "broken" and "ok" were told apart by
+       colour alone, which is no help to the one reader in twelve who cannot. */
     const dot = spider
-      ? `<i class="dot" style="background:var(${state === "ok" ? "--s3" : "--s2"})" title="${spider} (${state})"></i>`
-      : `<i class="dot dot--none" title="no spider"></i>`;
+      ? `<span class="spider" title="${esc(spider)} (${state})"><i class="dot dot--${state === "ok" ? "ok" : "bad"}"></i>${state === "ok" ? "ok" : "broken"}</span>`
+      : `<span class="spider" title="no spider"><i class="dot dot--none"></i>none</span>`;
+    const share = (e.m / e.n) * 100;
     const tr = el("tr");
     tr.innerHTML =
-      `<td><span class="rank num">${String(i + 1).padStart(2, "0")}</span> ${brandMark(net)}${esc(net)}</td>` +
+      `<td><span class="rank num">${String(i + 1).padStart(2, "0")}</span>${brandMark(net)}${esc(net)}</td>` +
       `<td class="num" data-v="${e.n}">${nf(e.n)}</td>` +
       `<td class="num" data-v="${e.p}">${nf(e.p)}</td>` +
       `<td class="num" data-v="${(e.p / e.n).toFixed(3)}">${(e.p / e.n).toFixed(1)}</td>` +
-      `<td class="num" data-v="${(e.m / e.n).toFixed(4)}">${((e.m / e.n) * 100).toFixed(0)}%</td>` +
-      `<td style="text-align:right" class="mono">${SRC_SHORT[e.src] || e.src}</td>` +
-      `<td style="text-align:center" data-v="${spider ? (state === "ok" ? 2 : 1) : 0}">${dot}</td>`;
+      `<td class="num" data-v="${(e.m / e.n).toFixed(4)}"><span class="cov">` +
+        `<span class="cov-track"><span style="width:${share.toFixed(1)}%"></span></span>${share.toFixed(0)}%</span></td>` +
+      `<td class="mono">${esc(SRC_SHORT[e.src] || e.src)}</td>` +
+      `<td data-v="${spider ? (state === "ok" ? 2 : 1) : 0}">${dot}</td>`;
     body.append(tr);
   });
   makeSortable("net-rows", 2);
@@ -1627,18 +1663,31 @@ async function load(fresh = false) {
     render(merged);
     if (rebuild) safe("refresh report", () => reportRefresh(rebuild, before, merged));
   } catch (e) {
-    $("status").innerHTML = `<span class="chip" style="color:var(--s2)">error</span> ${e.message}`;
-    $("dedupenote").innerHTML =
-      `<b>Could not load.</b> ${e.message}. Check that <span class="mono">DATA_ORIGIN</span> ` +
+    $("status").innerHTML = `<span class="chip" style="color:var(--miss)">error</span> ${esc(e.message)}`;
+    const why =
+      `<b>Could not load.</b> ${esc(e.message)}. Check that <span class="mono">DATA_ORIGIN</span> ` +
       `points at your deployed worker and that the worker has its <span class="mono">OVERPASS_KEY</span> secret set.`;
+    $("dedupenote").innerHTML = why;
+    /* Said at the top of the page as well. The method note is folded away, and
+       a board of empty signs with the reason hidden inside a closed panel reads
+       as a blank page rather than as a failure with a cause. */
+    const bad = $("load-error");
+    if (bad) { bad.innerHTML = why; bad.hidden = false; }
+    const wait = $("map-wait");
+    if (wait && !MERGED) wait.textContent = "No data to draw.";
   }
 }
 
 function initControls() {
   const sel = $("state-select");
-  const states = [...new Set(MERGED.sites.map((s) => s.state).filter(Boolean))].sort();
+  /* Listed by name, with the code after it: "MO" and "MS" are a coin toss for
+     anyone who does not live in one of them. The value is still the code. */
+  const states = [...new Set(MERGED.sites.map((s) => s.state).filter(Boolean))]
+    .map((code) => [code, STATES?.[code]?.name || code])
+    .sort((a, b) => a[1].localeCompare(b[1]));
   sel.innerHTML = `<option value="">Every state</option>` +
-    states.map((st) => `<option value="${st}">${st}</option>`).join("");
+    states.map(([code, name]) =>
+      `<option value="${esc(code)}">${esc(name === code ? code : `${name} (${code})`)}</option>`).join("");
   sel.value = VIEW.state || "";
   /* Still the one mechanism. The map's click and the ranked list both set this
      and fire change, so there is a single place that decides what "this state"
@@ -1660,6 +1709,22 @@ function initControls() {
   };
   const all = $("net-all");
   if (all) all.onclick = () => { VIEW.net = null; render(MERGED); };
+  const netClear = $("net-clear");
+  if (netClear) netClear.onclick = () => { VIEW.net = null; render(MERGED); };
+
+  /* The pill names the network; the list is where one is chosen. Clicking the
+     pill goes there, so it is never a label that looks like a control. */
+  const chip = $("net-chip");
+  if (chip) chip.onclick = () => {
+    showBrowse("nets");
+    $("browse")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    $("net-query")?.focus({ preventScroll: true });
+  };
+  for (const [id, tab] of [["tab-states", "states"], ["tab-nets", "nets"]]) {
+    const b = $(id);
+    if (b) b.onclick = () => showBrowse(tab);
+  }
+  showBrowse(VIEW.browse);
   const q = $("net-query");
   if (q) {
     q.value = VIEW.query || "";
@@ -1694,10 +1759,45 @@ function initControls() {
   }
 }
 
+/* Which of the two lists the panel beside the map shows. On a wide screen
+   both are visible and this changes nothing you can see — the stylesheet
+   decides that, so there is no width for this to keep in step with. */
+function showBrowse(tab) {
+  VIEW.browse = tab === "nets" ? "nets" : "states";
+  const host = $("browse");
+  if (host) host.dataset.tab = VIEW.browse;
+  for (const [id, t] of [["tab-states", "states"], ["tab-nets", "nets"]]) {
+    const b = $(id);
+    if (!b) continue;
+    b.classList.toggle("is-on", t === VIEW.browse);
+    b.setAttribute("aria-pressed", String(t === VIEW.browse));
+  }
+}
+
+/* Day and night. With no stored choice the page follows the system and the
+   stylesheet does that unaided; a click here pins the other one and remembers
+   it. Either way the map is a canvas, painted from the tokens at the moment it
+   was drawn, so it has to be told to draw again. */
+const K_THEME = "cb.theme";
+const themeNow = () =>
+  document.documentElement.dataset.theme ||
+  (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+function repaintForTheme() {
+  $("atlas")?._queue?.();
+}
+function toggleTheme() {
+  const next = themeNow() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  store.set(K_THEME, next);
+  repaintForTheme();
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", repaintForTheme);
+
 /* Bind defensively: a control removed from the markup must not take the page
    down at load. */
 const on = (id, ev, fn) => { const n = $(id); if (n) n.addEventListener(ev, fn); };
 on("export-missing", "click", downloadMissing);
+on("theme-toggle", "click", toggleTheme);
 on("refresh", "click", () => {
   const b = $("refresh");
   if (b) { b.classList.add("spin"); b.disabled = true; }
