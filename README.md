@@ -30,6 +30,36 @@ Positions published by an operator are leads, not surveys. Anything drawn from
 this board onto OpenStreetMap should be checked against imagery first — which is
 what the built-in editor is for.
 
+## What the editor proposes, and from what
+
+Each site gets one *inventory* (`siteInventory` in `app.js`): its ports — one
+vehicle charging — grouped into kinds, each with its cables and what each cable
+delivers. Tags, the dispensers offered for placing, the station totals and the
+GeoJSON export are all read off it, so they cannot disagree with one another.
+
+- `capacity` is ports, never cables. A twin-head cabinet is one port.
+- `socket:<type>` is cables of that type; `socket:<type>:output` is that
+  connector's own figure, never the cabinet's best.
+- Where two sources count a site differently both figures are shown, and where
+  a value already on the map differs from the sources it is kept unless the
+  mapper ticks it.
+- Free text becomes a tag only when it parses cleanly — hours, a single price —
+  and is otherwise shown in the source's own words.
+- An open date that many sites of one network share is a batch-load date and is
+  not written as `start_date`.
+
+`tools/stress.js` runs every site through that same code and checks the
+arithmetic, including against a second, independent reading of the raw
+payload:
+
+```bash
+bun tools/stress.js
+```
+
+It exits non-zero if an invariant fails, and lists how often each kind of
+source disagreement occurs. Run it after changing the merge, the inventory or
+the tag proposals.
+
 ## Licensing
 
 The `LICENSE` file (CC0 1.0) covers **the code in this repository** — the board,

@@ -109,7 +109,7 @@ const AFDC_BLOCKED_DETAIL = new Set(["KEY_ALWAYS"]);
 // A handful of AFDC records declare in their own name that they are not usable
 // — "NOT A PUBLIC SITE", "Private DCFC", "Test Site" — while still carrying
 // access_code=public. Believe the name.
-const NOT_PUBLIC_NAME = /\b(not a public|not public|private dcfc|test site|demo only)\b/i;
+const NOT_PUBLIC_NAME = /\b(not a public|not public|private dcfc|test site|demo only|for testing purpose)\b/i;
 const RESTRICTED_TEXT = /\b(permit holders?|private|residents? only|employees? only|tenants? only|badge)\b/i;
 
 /* Supercharger for Business: Tesla hardware bought and run by a host business.
@@ -207,7 +207,16 @@ function collapse(rows, m = 80) {
     if (!byAddr.has(k)) byAddr.set(k, []);
     byAddr.get(k).push(i);
   });
-  for (const idxs of byAddr.values()) for (let n = 1; n < idxs.length; n++) union(idxs[0], idxs[n]);
+  /* A shared address joins two records only while they could be one place.
+     The same street line turns up on records forty kilometres apart — a
+     dealer group reusing its head-office address — and joining those summed
+     two sites' ports into one. Past the bound an id is disbelieved at, an
+     address is too. */
+  for (const idxs of byAddr.values()) {
+    for (let n = 1; n < idxs.length; n++) {
+      if (metres(rows[idxs[0]], rows[idxs[n]]) <= OSM_REF_SANITY) union(idxs[0], idxs[n]);
+    }
+  }
 
   const groups = new Map();
   rows.forEach((r, i) => {
@@ -386,7 +395,9 @@ function bestMatch(s, ix, near) {
 function mergeUnits(rows) {
   const by = new Map();
   for (const u of rows) {
-    const key = `${u.kw ?? ""}|${Object.entries(u.conn).sort().map(([k, v]) => `${k}:${v}`).join(",")}`;
+    // `pw` is in the key: two cabinets with the same cables at different powers
+    // are two kinds, and folding them together would average one away
+    const key = `${u.kw ?? ""}|${Object.entries(u.conn).sort().map(([k, v]) => `${k}:${v}@${u.pw?.[k] ?? ""}`).join(",")}`;
     const hit = by.get(key);
     if (hit) hit.n += u.n;
     else by.set(key, { ...u });
@@ -444,18 +455,62 @@ function sourcePins(list) {
   return [...seen.values()].slice(0, 8);
 }
 
+/* What AFDC says about a site beyond its position and its ports — hours, a
+   price, which cards the reader takes, where on the property to look. One
+   record's worth, taken from the largest record of a collapsed group and
+   filled from the others where it is silent: they describe one forecourt, and
+   a detail only the second record carries is still a detail of this site. */
+const AFDC_EXTRA = ["zip", "hours", "price", "cards", "dir", "geo", "cls", "nid"];
+function afdcExtras(base, group) {
+  const out = {};
+  for (const k of AFDC_EXTRA) {
+    const v = base[k] ?? group.find((x) => x[k] != null)?.[k];
+    if (v != null) out[k] = v;
+  }
+  /* A geocoded coordinate only counts against the site when every record in
+     the group was geocoded. One surveyed position among them is the one the
+     site is placed at. */
+  if (out.geo && group.some((x) => !x.geo)) delete out.geo;
+  return out;
+}
+
+/* Open dates that are not opening dates.
+
+   AFDC's `open_date` is meant to be the day a station went into service. For
+   a network onboarded in bulk it is the day the batch was loaded: 247
+   ChargePoint sites "opened" on 27 January 2021, 120 EVgo sites on 7 March
+   2018. Written to OSM as `start_date` that is a false fact, and a confident
+   one. No network opens eight sites on one day, so a date shared by that many
+   of its records is treated as the import it is — still shown, never proposed
+   as a tag. Counted on raw records, before collapsing, because that is the
+   level the batch was loaded at. */
+const BULK_DATE_MIN = 8;
+function bulkDates(records) {
+  const n = new Map();
+  for (const r of records) {
+    if (!r.open) continue;
+    const k = `${r.net}|${r.open}`;
+    n.set(k, (n.get(k) || 0) + 1);
+  }
+  return (net, open) => {
+    const c = open ? n.get(`${net}|${open}`) || 0 : 0;
+    return c >= BULK_DATE_MIN ? c : 0;
+  };
+}
+
 /* ---------------------------------------------------------------------- merge */
 
 function merge(afdc, tesla, ea, ionna, osm) {
   const sites = [];
   let afdcRecords = afdc.sites.length, afdcSites = 0, cpRecords = 0, cpSites = 0;
 
-  const excluded = { afdc: 0, ea: 0, tesla: 0 };
+  const excluded = { afdc: 0, ea: 0, tesla: 0, eaAc: 0 };
 
   // access values no source has taught us to read — see ATP_RESTRICTED
 
   const unknownAccess = new Set();
   const overridden = [];               // AFDC ids for networks a better source supplies
+  const bulk = bulkDates(afdc.sites);
   const byNet = new Map();
   for (const s of afdc.sites) {
     if (s.restricted || AFDC_BLOCKED_DETAIL.has(s.accessDetail) || NOT_PUBLIC_NAME.test(s.name || "")) {
@@ -481,20 +536,25 @@ function merge(afdc, tesla, ea, ionna, osm) {
            date, and therefore no place in the openings queue at all. Set the
            lot aside and let the reunion fill whatever the better source left
            blank. */
+        const open = g.map((x) => x.open).filter(Boolean).sort()[0] || null;
         overridden.push({ net: disp(net), lat: base.lat, lon: base.lon,
           refs: [...new Set(g.map((x) => x.id).filter((id) => id != null))].sort((a, b) => a - b),
           pins: sourcePins(g.map((x) => ({ lat: x.lat, lon: x.lon, src: "AFDC", ref: x.id }))),
           units: mergeUnits(g.flatMap((x) => x.units || [])),
-          open: g.map((x) => x.open).filter(Boolean).sort()[0] || null,
+          open, openBulk: bulk(net, open),
           conf: g.map((x) => x.conf).filter(Boolean).sort().pop() || null,
           city: base.city || null, street: base.street || null, fac: base.fac || null,
-          afdcPorts: g.reduce((a, b) => a + (b.ports || 0), 0) || null });
+          afdcPorts: g.reduce((a, b) => a + (b.ports || 0), 0) || null,
+          extra: afdcExtras(base, g) });
       }
       continue;
     }
     for (const g of groups) {
       const base = g.reduce((a, b) => (b.ports > a.ports ? b : a));
+      const open = g.map((x) => x.open).filter(Boolean).sort()[0] || null;
       sites.push({
+        ...afdcExtras(base, g),
+        openBulk: bulk(net, open),
         net: disp(net), name: base.name, lat: base.lat, lon: base.lon, state: base.state,
         // the street address AFDC publishes, kept for the export: a coordinate
         // in a car park is easier to find when something names the road
@@ -541,15 +601,31 @@ function merge(afdc, tesla, ea, ionna, osm) {
     // supercharge.info counts stalls carrying each plug type. They overlap by
     // design — a Magic Dock stall offers both — so these are per-connector
     // counts, not a partition of the stalls, which is what socket:* means.
+    /* `tpc` and `nacs` are added, not compared. They are the same plug under
+       two names — Tesla's proprietary connector before and after it was
+       published as a standard — and a site part-way through being relabelled
+       lists some stalls under each. Taking the larger of the two, as this did,
+       reported 8 sockets at a 12-stall site; the sum equals the stall count at
+       every one of the 3,312 open US sites. */
     const sockets = {};
     for (const [k, v] of Object.entries(s.plugs || {})) {
       if (!v || k === "multi") continue;
       const key = k === "tpc" || k === "nacs" ? "nacs" : k === "ccs1" ? "type1_combo" : k === "chademo" ? "chademo" : null;
-      if (key) sockets[key] = Math.max(sockets[key] || 0, v);
+      if (key) sockets[key] = (sockets[key] || 0) + v;
     }
     sites.push({
       net: owner || "Tesla", name: s.name, lat: s.lat, lon: s.lon, state: s.state,
       ports: s.ports || 1, open: s.open, conf: null, fac: null,
+      city: s.city || null, street: s.street || null,
+      ...(s.zip ? { zip: s.zip } : {}),
+      /* What supercharge.info says about the hardware, which is what turns a
+         stall count into something that can be tagged: the site's power, which
+         generation of post each stall is, and whether other makes can use it. */
+      ...(s.power ? { power: s.power } : {}),
+      ...(s.stalls && Object.keys(s.stalls).length ? { stalls: s.stalls } : {}),
+      ...(s.host ? { host: s.host } : {}),
+      ...(s.dir ? { dir: s.dir } : {}),
+      ...(typeof s.other === "boolean" ? { other: s.other } : {}),
       src: "supercharge.info", conn: [...conn], sockets,
       // supercharge.info's site id. `ref:supercharge_info` is on 2,929 US
       // elements, so this is a published identifier OSM already keeps, exactly
@@ -564,6 +640,7 @@ function merge(afdc, tesla, ea, ionna, osm) {
   // socket, and summing them by type gives the real per-connector totals.
   const units = new Map();
   const eaSockets = new Map();
+  const eaPosts = new Map();
   for (const p of ea.sites) {
     if (p.kind !== "point") continue;
     const base = String(p.ref).includes("-") ? String(p.ref).replace(/-[^-]*$/, "") : String(p.ref);
@@ -572,15 +649,35 @@ function merge(afdc, tesla, ea, ionna, osm) {
     if (!eaSockets.has(base)) eaSockets.set(base, {});
     const tally = eaSockets.get(base);
     for (const [k, v] of Object.entries(p.sockets)) tally[k] = (tally[k] || 0) + (Number(v) || 1);
+    // each post as the operator describes it, kept whole for the inventory
+    if (!eaPosts.has(base)) eaPosts.set(base, []);
+    eaPosts.get(base).push(p);
   }
   for (const p of ea.sites) {
     if (p.kind !== "site") continue;
     if (p.access && ATP_RESTRICTED.has(p.access)) { excluded.ea++; continue; }
+    if (NOT_PUBLIC_NAME.test(p.name || "")) { excluded.ea++; continue; }
     // Not known either way: kept, but counted so a vocabulary change shows up
     // as a figure on the page instead of as a network quietly going missing.
     if (p.access && !ATP_OPEN.has(p.access)) unknownAccess.add(p.access);
+    const posts = eaPosts.get(String(p.ref)) || [];
+    /* Posts listed, and not one of them DC: a Level 2 site. Thirty of these
+       were on a board of fast charging, each as "1 port, CCS" — a placeholder
+       count and a connector the site does not have. A site with no posts
+       listed at all is a different case and is kept: that is the source being
+       incomplete, not the site being slow. */
+    if (posts.length && !units.has(String(p.ref))) { excluded.eaAc++; continue; }
     sites.push({ net: "Electrify America", name: p.name, lat: p.lat, lon: p.lon, state: p.state,
       ports: units.get(String(p.ref)) || 1, open: null, conf: null, fac: null,
+      city: p.city || null, street: p.street || null,
+      ...(p.zip ? { zip: p.zip } : {}), ...(p.web ? { web: p.web } : {}),
+      // the operator's own site number, which AFDC quotes for the same place
+      nid: String(p.ref),
+      /* Set when All the Places has the site and none of its posts — 65 of
+         them. `ports` is then the placeholder 1 from the line above, not a
+         count, and is replaced with AFDC's once the two records are paired. */
+      ...(units.has(String(p.ref)) ? {} : { portsUnknown: true }),
+      posts: postKinds(posts),
       src: "ATP electrify_america_us", conn: ["CCS1"], sockets: eaSockets.get(String(p.ref)) || {} });
   }
 
@@ -590,6 +687,11 @@ function merge(afdc, tesla, ea, ionna, osm) {
     if (p.sockets.type1_combo) conn.push("CCS1");
     sites.push({ net: "IONNA", name: p.name, lat: p.lat, lon: p.lon, state: p.state,
       ports: p.capacity || 1, open: null, conf: null, fac: null, src: "ATP ionna_us",
+      city: p.city || null, street: p.street || null,
+      ...(p.zip ? { zip: p.zip } : {}), ...(p.web ? { web: p.web } : {}),
+      ...(p.fee ? { fee: p.fee } : {}), ...(p.pfee ? { pfee: p.pfee } : {}),
+      ...(p.hours ? { hours: p.hours, hoursOsm: true } : {}),
+      ...(p.capacity ? {} : { portsUnknown: true }),
       conn, sockets: p.sockets || {} });
   }
 
@@ -634,35 +736,72 @@ function merge(afdc, tesla, ea, ionna, osm) {
      own network nearby keeps its ids to itself, since a wrong one would be
      written into OSM as somebody else's `ref:afdc`. */
   const siteIx = indexOsm(sites);
-  let reunited = 0;
+  /* By the operator's own number where both records quote it. Electrify
+     America's site id is in AFDC and in All the Places, so 1,196 of its sites
+     are paired by declaration; the distance rule is for the rest, and for the
+     two networks whose sources share no id. */
+  const byNid = new Map();
+  for (const t of sites) if (t.nid) byNid.set(`${t.net}|${t.nid}`, t);
+  const paired = new Map();            // site → the AFDC groups that answer for it
   for (const g of overridden) {
-    const gy = Math.floor(g.lat / siteIx.cell), gx = Math.floor(g.lon / siteIx.cell);
-    let hit = null, at = Infinity;
-    for (let dy = -1; dy <= 1; dy++)
-      for (let dx = -1; dx <= 1; dx++)
-        for (const t of siteIx.grid.get(`${gy + dy},${gx + dx}`) || []) {
-          if (t.net !== g.net) continue;
-          const d = metres(g, t);
-          if (d <= OSM_BRAND_NEAR && d < at) { hit = t; at = d; }
-        }
+    let hit = g.extra?.nid ? byNid.get(`${g.net}|${g.extra.nid}`) || null : null;
+    // an id is believed up to the same bound as `ref:afdc`: past it, it is a typo
+    if (hit && metres(g, hit) > OSM_REF_SANITY) hit = null;
+    const byId = !!hit;
+    let at = hit ? metres(g, hit) : Infinity;
+    if (!hit) {
+      const gy = Math.floor(g.lat / siteIx.cell), gx = Math.floor(g.lon / siteIx.cell);
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++)
+          for (const t of siteIx.grid.get(`${gy + dy},${gx + dx}`) || []) {
+            if (t.net !== g.net) continue;
+            const d = metres(g, t);
+            if (d <= OSM_BRAND_NEAR && d < at) { hit = t; at = d; }
+          }
+    }
     if (!hit) continue;
-    hit.refs = [...new Set([...(hit.refs || []), ...g.refs])].sort((a, b) => a - b);
+    if (!paired.has(hit)) paired.set(hit, []);
+    paired.get(hit).push({ g, at, byId });
+  }
+
+  let reunited = 0;
+  for (const [hit, list] of paired) {
+    /* A site paired by id is answered by that record and no other. Before the
+       id was carried, a second AFDC group that merely stood within the radius
+       was attached as well — its `ref:afdc` written onto a neighbour, and its
+       units never counted. Where there is no id, everything in the radius is
+       still taken, nearest first: AFDC files an expansion as a record of its
+       own often enough that leaving the second one out loses half the site. */
+    const named = list.filter((x) => x.byId);
+    const use = (named.length ? named : list).sort((a, b) => a.at - b.at);
+    const groups = use.map((x) => x.g);
+    hit.refs = [...new Set([...(hit.refs || []), ...groups.flatMap((g) => g.refs)])].sort((a, b) => a - b);
     /* Fill gaps only. All the Places and supercharge.info are here because they
        are better on stalls and status, so `ports` is theirs and stays theirs —
        what AFDC adds is everything they do not carry. Where both have a figure
        the better source wins; where only AFDC has one, having it beats not. */
-    if (!hit.units?.length && g.units?.length) hit.units = g.units;
-    hit.open ??= g.open;
-    hit.conf ??= g.conf;
-    hit.city ??= g.city;
-    hit.street ??= g.street;
-    hit.fac ??= g.fac;
+    const units = mergeUnits(groups.flatMap((g) => g.units || []));
+    if (!hit.units?.length && units.length) hit.units = units;
+    for (const g of groups) {
+      if (hit.open == null && g.open) { hit.open = g.open; hit.openBulk = g.openBulk; hit.openSrc = "AFDC"; }
+      hit.conf ??= g.conf;
+      hit.city ??= g.city;
+      hit.street ??= g.street;
+      hit.fac ??= g.fac;
+      /* Not `geo`: that is a remark about AFDC's own coordinate, and this
+         site is standing on its better source's. */
+      for (const [k, v] of Object.entries(g.extra || {})) if (k !== "nid" && k !== "geo") hit[k] ??= v;
+    }
     /* Kept apart from `ports` rather than reconciled with it. The two sources
        count different things — AFDC counts what it was told, ATP counts what
        the operator's own map shows today — and a panel that quietly averaged
        them would be inventing a number neither publishes. The editor shows both
        and says when they disagree. */
-    if (g.afdcPorts != null) hit.afdcPorts = g.afdcPorts;
+    const afdcPorts = groups.reduce((a, g) => a + (g.afdcPorts || 0), 0);
+    if (afdcPorts) hit.afdcPorts = afdcPorts;
+    /* The better source had the site and not its ports, so AFDC's count stands
+       in for the placeholder — and the site says whose number it is. */
+    if (hit.portsUnknown && afdcPorts) { hit.ports = afdcPorts; hit.portsSrc = "AFDC"; }
     /* Two sources, two coordinates, one forecourt. This is the pairing where
        they disagree most — supercharge.info and All the Places aim at the
        stalls, AFDC often at the site entrance — so carrying both is worth more
@@ -670,9 +809,9 @@ function merge(afdc, tesla, ea, ionna, osm) {
     hit.pins = sourcePins([
       ...(hit.pins || []),
       { lat: hit.lat, lon: hit.lon, src: hit.src },
-      ...(g.pins || [{ lat: g.lat, lon: g.lon, src: "AFDC" }]),
+      ...groups.flatMap((g) => g.pins || [{ lat: g.lat, lon: g.lon, src: "AFDC" }]),
     ]);
-    reunited++;
+    reunited += groups.length;
   }
 
   /* OSM coverage, three states. On the map at all, and mapped with socket
@@ -977,7 +1116,8 @@ function render(M) {
     ["Dedupe", `${nf(D.afdcRecords)} AFDC records to ${nf(D.afdcSites)} sites. ChargePoint ${nf(D.cpRecords)} to ${nf(D.cpSites)}; every other network under 2%.`],
     ["OSM match", `${OSM_NEAR} m against ${nf(M.osmTotal)} mapped stations (${nf(M.osmDc)} with socket tags), widened by the size of any mapped area, or ${OSM_BRAND_NEAR} m for a match on the same operator — but never between two different networks, however close they stand. ${nf(M.refMatched)} sites skipped all of that and matched outright on a <span class="mono">ref:afdc</span> or <span class="mono">ref:supercharge_info</span> the mapper had already recorded.`],
     ["On a host", `Some charging is recorded on the business hosting it rather than mapped as a station. Where that business also carries the <span class="mono">ref:afdc</span> this site is listed under, it counts as mapped — ${nf(M.hostMapped)} sites. Where the tag stands alone it is only <i>noted</i>, and ${nf(M.noted)} sites sit there.`],
-    ["Excluded", `${nf(M.excluded.afdc)} gated or key-only, ${nf(M.excluded.ea)} customers-only, ${nf(M.excluded.tesla)} permit-only.` +
+    ["Excluded", `${nf(M.excluded.afdc)} gated or key-only, ${nf(M.excluded.ea)} customers-only or test sites, ${nf(M.excluded.tesla)} permit-only` +
+      `${M.excluded.eaAc ? `, ${nf(M.excluded.eaAc)} Electrify America sites with Level 2 posts only` : ""}.` +
       (M.unknownAccess?.length
         ? ` A source is publishing <span class="mono">access</span> values this board does not
            recognise — ${M.unknownAccess.map((v) => `<span class="mono">${esc(v)}</span>`).join(", ")} —
@@ -1234,6 +1374,354 @@ function unitSockets(units) {
   return total;
 }
 
+/* ---------------------------------------------------------- inventory
+
+   What stands at a site, worked out once and read by everything that has to
+   say it: the tags the editor proposes, the dispensers it offers to place, the
+   station totals it writes, the export.
+
+   The unit of account is the *port* — one vehicle charging — because that is
+   the one thing every source counts, whatever it calls it. AFDC's "charging
+   unit" is a port (its `port_count` is 1 on all 85,371 of them, and summing
+   them reproduces `ev_dc_fast_num` at every site). supercharge.info's stall is
+   a port. An Electrify America post in All the Places is a port. A port has
+   one or more cables, and they are not the same number: 12,800 AFDC ports
+   carry two connector types, and 799 carry two cables of one type that still
+   charge one car. So:
+
+     capacity          ports
+     socket:<type>     cables of that type, summed over ports
+     …:output          what that cable delivers — per connector, never per port
+
+   A *kind* is `n` identical ports. Kinds are what a mapper places: "six of
+   these, two of those". Where a source gives only totals — IONNA publishes
+   "4 CCS, 2 NACS, capacity 6" — the kinds are whatever those totals force and
+   nothing more is read into them.
+
+   Sources disagree, and the disagreement is kept rather than averaged. The
+   site's own source (the one it was taken from in the merge) decides the port
+   count, because that is why it was preferred; AFDC's breakdown is used on top
+   of it only when it accounts for the same number of ports, and otherwise the
+   two figures are both reported and the mapper, who can see the forecourt,
+   chooses. */
+
+const SOCKET_LABEL = {
+  type1_combo: "CCS", chademo: "CHAdeMO", nacs: "NACS", type1: "J1772",
+  nema_5_15: "NEMA 5-15", nema_5_20: "NEMA 5-20", nema_14_50: "NEMA 14-50",
+};
+const socketLabel = (t) => SOCKET_LABEL[t] || t;
+// DC before AC, then the order a driver would list them in
+const SOCKET_ORDER = ["type1_combo", "nacs", "chademo", "type1", "nema_14_50", "nema_5_20", "nema_5_15"];
+const socketRank = (t) => { const i = SOCKET_ORDER.indexOf(t); return i < 0 ? 99 : i; };
+const sourceName = (src) => /^ATP/.test(src || "") ? "All the Places" : src || "the source";
+
+const kindKey = (k) => Object.keys(k.conn).sort()
+  .map((t) => `${t}:${k.conn[t]}@${k.kw?.[t] ?? ""}`).join(",");
+const kindIsDc = (k) => Object.keys(k.conn).some((t) => DC_SOCKET.has(t));
+
+/* Fold identical ports together and put them in a stable order: DC first,
+   strongest first, most numerous first. The order is the order the editor
+   offers them in, so it wants to be the order somebody would place them. */
+function foldKinds(list) {
+  const by = new Map();
+  for (const k of list) {
+    if (!k.n || !Object.keys(k.conn).length) continue;
+    const key = kindKey(k);
+    const hit = by.get(key);
+    if (hit) hit.n += k.n;
+    else by.set(key, { ...k, conn: { ...k.conn }, kw: { ...(k.kw || {}) }, dc: kindIsDc(k) });
+  }
+  const best = (k) => Math.max(0, ...Object.values(k.kw || {}).map((v) => v || 0));
+  return [...by.values()].sort((a, b) => (b.dc - a.dc) || best(b) - best(a) || b.n - a.n);
+}
+
+/* AFDC's units, in OSM's vocabulary.
+
+   Two payload shapes arrive here. The current one carries `pw`, the power of
+   each connector, on every unit with more than one connector type. The one
+   before it carried a single `kw` per unit — the largest — which for a
+   multi-connector unit does not say which connector it belongs to. Rather than
+   guess, power is left unknown there: an output that is missing gets filled in
+   by whoever is looking at the cabinet, and one that is wrong gets believed. */
+function afdcKinds(units) {
+  const out = [];
+  for (const u of units || []) {
+    const names = Object.keys(u.conn || {});
+    const conn = {}, kw = {};
+    for (const k of names) {
+      const t = CONN_SOCKET[k];
+      if (!t) continue;
+      conn[t] = (conn[t] || 0) + u.conn[k];
+      const p = u.pw ? u.pw[k] : names.length === 1 ? u.kw : null;
+      // J3271 and TESLA are one socket in OSM; the stronger figure stands
+      if (p > 0) kw[t] = Math.max(kw[t] || 0, p);
+    }
+    if (Object.keys(conn).length) out.push({ n: u.n, conn, kw, src: "AFDC" });
+  }
+  return foldKinds(out);
+}
+
+/* Electrify America's posts, as its own site lists them. Each is a port with
+   the connectors it offers and what each delivers. What the operator does not
+   say is how many cables: the connector is `yes`, never a number, so a count
+   of 1 here means "present" and the kind is marked `vague` so nothing
+   downstream mistakes it for a measurement. */
+function postKinds(posts) {
+  return foldKinds((posts || []).map((p) => ({
+    n: 1,
+    conn: Object.fromEntries(Object.entries(p.sockets || {}).filter(([, n]) => n > 0)),
+    kw: { ...(p.out || {}) },
+    ...(p.amp ? { amp: p.amp } : {}),
+    ...(p.volt ? { volt: p.volt } : {}),
+    ...(p.vague?.length ? { vague: true } : {}),
+    src: "All the Places",
+  })));
+}
+
+/* Which generations of Supercharger post a site has, from supercharge.info's
+   stall breakdown: [["v3", 24], ["v4", 8]]. */
+const teslaGens = (s) => Object.entries(s.stalls || {}).filter(([k, n]) => /^(v\d|urban)$/.test(k) && n > 0);
+
+/* A Supercharger site from supercharge.info: a stall count, which plugs those
+   stalls carry, one power figure for the site. Every stall is a port with a
+   NACS cable; `ccs1` of them also carry CCS (a Magic Dock, or a V4 post with
+   both).
+
+   The power figure is the site's best stall. Where every stall is one
+   generation that is every stall's, and each port carries it. Where the site
+   mixes generations it is not: New Braunfels is 24 V3 stalls and 8 V4, listed
+   at 500 kW, and the feed does not say which of the 32 deliver it — the V3
+   stalls, which are the ones with the CCS adapters, certainly do not. So on a
+   mixed site no port is given a power here. The site's figure is still true
+   as the fastest NACS stall and is reported as that (`peak`, below); the CCS
+   figure is simply not known. */
+function teslaKinds(s) {
+  const stalls = s.ports || 0;
+  if (!stalls) return [];
+  const nacs = s.sockets?.nacs || 0;
+  const ccs = Math.min(s.sockets?.type1_combo || 0, stalls);
+  if (!nacs && !ccs) return [];
+  const mixed = teslaGens(s).length > 1;
+  const kw = (types) => Object.fromEntries(s.power && !mixed ? types.map((t) => [t, s.power]) : []);
+  const both = Math.min(ccs, nacs);
+  const more = mixed ? { mixed: true } : {};
+  return foldKinds([
+    { n: both, conn: { nacs: 1, type1_combo: 1 }, kw: kw(["nacs", "type1_combo"]), src: "supercharge.info", ...more },
+    { n: Math.max(0, nacs - both), conn: { nacs: 1 }, kw: kw(["nacs"]), src: "supercharge.info", ...more },
+    { n: Math.max(0, ccs - both), conn: { type1_combo: 1 }, kw: kw(["type1_combo"]), src: "supercharge.info", ...more },
+  ]);
+}
+
+/* A source that states totals and a capacity, and nothing about which port has
+   which cable (IONNA). When the cables add up to the capacity, each cable is
+   its own port and the kinds follow. When they do not, the arrangement is not
+   known and no kinds are offered — the totals still stand. */
+function totalKinds(s) {
+  const counted = Object.entries(s.sockets || {}).filter(([, n]) => Number(n) > 0);
+  const cables = counted.reduce((a, [, n]) => a + Number(n), 0);
+  if (!counted.length || s.portsUnknown || cables !== s.ports) return [];
+  return foldKinds(counted.map(([t, n]) => ({ n: Number(n), conn: { [t]: 1 }, kw: {}, src: sourceName(s.src) })));
+}
+
+const kindBays = (kinds) => {
+  let dc = 0, ac = 0;
+  for (const k of kinds) { if (k.dc) dc += k.n; else ac += k.n; }
+  return { dc, ac, total: dc + ac };
+};
+
+/* Cables and their powers, per socket type, across a set of kinds.
+   `powers` is [[kW, cables], …] strongest first; `unknown` is how many cables
+   have no figure from any source. */
+function kindSockets(kinds) {
+  const out = {};
+  for (const k of kinds) {
+    for (const [t, c] of Object.entries(k.conn)) {
+      const e = out[t] || (out[t] = { n: 0, by: new Map(), unknown: 0, vague: false });
+      e.n += c * k.n;
+      if (k.vague) e.vague = true;
+      const p = k.kw?.[t];
+      if (p > 0) e.by.set(p, (e.by.get(p) || 0) + c * k.n);
+      else e.unknown += c * k.n;
+    }
+  }
+  for (const e of Object.values(out)) {
+    e.powers = [...e.by].sort((a, b) => b[0] - a[0]);
+    e.max = e.powers[0]?.[0] ?? null;
+    delete e.by;
+  }
+  return out;
+}
+
+const fmtKw = (v) => `${Number.isInteger(v) ? v : Math.round(v * 10) / 10} kW`;
+
+/* One kind in words: "CCS 350 kW", "CCS 150 kW + CHAdeMO 50 kW",
+   "2× CCS 350 kW". */
+function kindLabel(k) {
+  return Object.keys(k.conn).sort((a, b) => socketRank(a) - socketRank(b)).map((t) =>
+    `${k.conn[t] > 1 ? `${k.conn[t]}× ` : ""}${socketLabel(t)}${k.kw?.[t] ? ` ${fmtKw(k.kw[t])}` : ""}`).join(" + ");
+}
+
+function siteInventory(s) {
+  if (s._inv) return s._inv;
+  const flags = [];
+  const own = /supercharge/i.test(s.src || "") ? teslaKinds(s)
+    : s.posts?.length ? s.posts
+    : s.src === "AFDC" ? [] : totalKinds(s);
+  const afdc = afdcKinds(s.units);
+  const ownName = sourceName(s.src);
+  const ownBays = kindBays(own), afdcBays = kindBays(afdc);
+
+  let kinds, src;
+  const claims = [];
+  if (s.src === "AFDC" || !own.length) {
+    kinds = afdc; src = afdc.length ? "AFDC" : null;
+    if (s.src !== "AFDC" && !s.portsUnknown && s.ports) claims.push({ src: ownName, n: s.ports });
+    if (afdcBays.dc) claims.push({ src: "AFDC", n: afdcBays.dc });
+  } else {
+    claims.push({ src: ownName, n: ownBays.dc });
+    if (afdcBays.dc) claims.push({ src: "AFDC", n: afdcBays.dc });
+    const ownTypes = new Set(own.filter((k) => k.dc).flatMap((k) => Object.keys(k.conn)));
+    const afdcTypes = new Set(afdc.filter((k) => k.dc).flatMap((k) => Object.keys(k.conn)));
+    const typesAgree = [...ownTypes].every((t) => afdcTypes.has(t));
+    /* AFDC's breakdown replaces the better source's only when it describes the
+       same site: the same number of ports, and every connector the operator
+       lists. Then it is the fuller of two consistent accounts — it has the
+       cable counts Electrify America omits and the per-stall power
+       supercharge.info does not publish. Anything less than agreement and it
+       is a second opinion, reported beside the first. */
+    if (afdcBays.dc && afdcBays.dc === ownBays.dc && typesAgree) {
+      kinds = afdc.map((k) => ({ ...k })); src = "AFDC";
+      borrow(kinds, own, ["kw", "amp", "volt"]);
+      // the operator's Level 2 posts, if it lists any AFDC does not
+      if (!afdcBays.ac && ownBays.ac) kinds.push(...own.filter((k) => !k.dc));
+    } else {
+      kinds = own.map((k) => ({ ...k, kw: { ...k.kw } })); src = ownName;
+      /* AFDC's power is borrowed for a connector the site's own source left
+         blank — except on a mixed-generation Supercharger site, where the
+         blank is deliberate: AFDC's figure there describes the stalls it knew
+         about, and spreading it over the ones it did not is the very guess the
+         blank was avoiding. */
+      if (!own.some((k) => k.mixed)) borrow(kinds, afdc, ["kw"]);
+      if (!ownBays.ac && afdcBays.ac) kinds.push(...afdc.filter((k) => !k.dc));
+      if (afdcBays.dc && afdcBays.dc !== ownBays.dc) {
+        flags.push({ level: "warn", text:
+          `${ownName} counts ${nf(ownBays.dc)} fast-charging port${ownBays.dc === 1 ? "" : "s"} here; ` +
+          `AFDC itemises ${nf(afdcBays.dc)}. ${ownName}'s figure is proposed — count what the imagery shows.` });
+      } else if (afdcBays.dc && !typesAgree) {
+        flags.push({ level: "warn", text:
+          `${ownName} lists ${[...ownTypes].map(socketLabel).join(" and ")} here; AFDC lists ` +
+          `${[...afdcTypes].map(socketLabel).join(" and ") || "none of them"}. ${ownName}'s connectors are proposed.` });
+      }
+    }
+  }
+  kinds = foldKinds(kinds);
+
+  const bays = kindBays(kinds);
+  const sockets = kindSockets(kinds);
+  /* The one thing a mixed Supercharger site does state: its fastest stall. It
+     is a NACS stall by definition, so the site's NACS output can say so even
+     though no individual port can. */
+  if (src === "supercharge.info" && s.power && sockets.nacs && sockets.nacs.max == null) sockets.nacs.peak = s.power;
+
+  /* No kinds at all: a source that named its connectors and counted nothing
+     behind them. The totals are what there is — a port count, and connector
+     types marked present. */
+  let capacity = bays.total || null;
+  if (!kinds.length) {
+    capacity = s.portsUnknown ? null : s.ports || null;
+    const counted = Object.entries(s.sockets || {}).filter(([, n]) => Number(n) > 0);
+    for (const [t, n] of counted) sockets[t] = { n: Number(n), powers: [], max: null, unknown: Number(n), vague: false };
+    if (!counted.length) {
+      for (const c of s.conn || []) {
+        const t = { CCS1: "type1_combo", "NACS / Tesla": "nacs", CHAdeMO: "chademo", "J1772 (AC)": "type1" }[c];
+        if (t) sockets[t] = { n: null, powers: [], max: null, unknown: 0, vague: true };
+      }
+    }
+  }
+
+  /* ---- what is worth saying about it ---- */
+  if (s.portsSrc === "AFDC") {
+    flags.push({ level: "info", text:
+      `${ownName} lists this site without its posts, so the port count is AFDC's.` });
+  }
+  if (s.portsUnknown && !s.portsSrc) {
+    flags.push({ level: "warn", text:
+      `No source counts the ports here. Capacity is left off — add it from the imagery.` });
+  }
+  /* Records joined by address rather than by standing together. They are
+     usually one property — a campus, a dealer's two lots — and the count is
+     then the property's, not the forecourt's. */
+  const spread = (s.refs?.length || 0) > 1 && s.src === "AFDC"
+    ? Math.max(0, ...(s.pins || []).map((p) => metres(s, p))) : 0;
+  if (spread > 150) {
+    flags.push({ level: "warn", text:
+      `The ${nf(s.refs.length)} AFDC records behind this site share an address and stand up to ` +
+      `${nf(Math.round(spread))} m apart. The counts cover all of them — if the imagery shows ` +
+      `separate sites, this is more than the one in front of you.` });
+  }
+  const twin = kinds.filter((k) => Object.values(k.conn).some((c) => c > 1));
+  if (twin.length) {
+    const n = twin.reduce((a, k) => a + k.n, 0);
+    flags.push({ level: "info", text:
+      `${nf(n)} port${n === 1 ? " has" : "s have"} two cables of one type and charge one car at a time, ` +
+      `so sockets outnumber capacity here.` });
+  }
+  if (kinds.some((k) => k.vague)) {
+    flags.push({ level: "info", text:
+      `${ownName} says which connectors each post has, not how many cables. ` +
+      `Socket counts here are posts carrying that connector.` });
+  }
+  for (const [t, e] of Object.entries(sockets)) {
+    if (e.powers.length > 1) {
+      flags.push({ level: "info", text:
+        `${socketLabel(t)} power varies: ${e.powers.map(([kw, c]) => `${nf(c)} at ${fmtKw(kw)}`).join(", ")}` +
+        `${e.unknown ? `, ${nf(e.unknown)} unstated` : ""}. The fastest is proposed as the output.` });
+    } else if (e.n && e.unknown === e.n && DC_SOCKET.has(t) && !e.peak && !kinds.some((k) => k.mixed)) {
+      flags.push({ level: "info", text: `No source states the ${socketLabel(t)} power here.` });
+    }
+  }
+  const gens = teslaGens(s);
+  if (gens.length > 1 && src === "supercharge.info" && s.power) {
+    flags.push({ level: "info", text:
+      `Mixed Supercharger hardware (${gens.map(([k, n]) => `${nf(n)} ${k.toUpperCase()}`).join(", ")}). ` +
+      `${fmtKw(s.power)} is the fastest stall here; which stalls deliver it is not published, ` +
+      `so the dispensers carry no power figure${sockets.type1_combo ? " and CCS has none at all" : ""}.` });
+  }
+
+  const agree = new Set(claims.map((c) => c.n)).size <= 1;
+  return (s._inv = { kinds, src, bays, capacity, sockets, claims, agree, flags });
+}
+
+/* Fill what one account leaves blank from the other, connector by connector.
+   Only ever a gap, and only when the donor is unambiguous: if it offers CCS at
+   both 350 and 150 kW there is no telling which a given port is, so nothing is
+   taken. */
+function borrow(kinds, donor, fields) {
+  for (const f of fields) {
+    const seen = {};
+    for (const d of donor) {
+      for (const [t, v] of Object.entries(d[f] || {})) {
+        if (v > 0) (seen[t] ||= new Set()).add(v);
+      }
+    }
+    for (const k of kinds) {
+      for (const t of Object.keys(k.conn)) {
+        if (k[f]?.[t] > 0) continue;
+        /* Current and voltage follow the power they were quoted with: a 350 kW
+           post is 1000 V, a 150 kW one 500 V, and giving every CCS cable the
+           same pair would be wrong for half of them. So those are matched on
+           the donor's power for that connector, not merely on its type. */
+        if (f !== "kw") {
+          const match = donor.find((d) => d[f]?.[t] > 0 && d.kw?.[t] && d.kw[t] === k.kw?.[t]);
+          if (match) (k[f] ||= {})[t] = match[f][t];
+          continue;
+        }
+        if (seen[t]?.size === 1) (k[f] ||= {})[t] = [...seen[t]][0];
+      }
+    }
+  }
+}
+
 /* ------------------------------------------------------------- export
 
    The unmapped list, as GeoJSON, for working somewhere other than here — JOSM,
@@ -1249,9 +1737,16 @@ function unitSockets(units) {
    this passes it straight through, so the geometry is a lead, not a survey. */
 function missingGeoJSON(sites, scope) {
   const features = sites.map((s) => {
-    const sockets = Object.fromEntries(
-      Object.entries(unitSockets(s.units)).map(([k, n]) => [`socket:${k}`, n]));
-    const kw = Math.max(0, ...(s.units || []).map((u) => u.kw || 0));
+    /* The same inventory the editor proposes from, so the file and the panel
+       cannot say different things about one site: ports as `capacity`, cables
+       per connector, and each connector's own output where a source states
+       it. */
+    const inv = siteInventory(s);
+    const sockets = {};
+    for (const [t, e] of Object.entries(inv.sockets)) {
+      sockets[`socket:${t}`] = e.n ?? "yes";
+      if (e.max || e.peak) sockets[`socket:${t}:output`] = fmtKw(e.max || e.peak);
+    }
     return {
       type: "Feature",
       geometry: { type: "Point", coordinates: [round6(s.lon), round6(s.lat)] },
@@ -1266,8 +1761,9 @@ function missingGeoJSON(sites, scope) {
         last_confirmed: s.conf || null,
         source: s.src || null,
         "ref:afdc": (s.refs || []).join(";") || null,
+        "ref:supercharge_info": s.sc ? String(s.sc) : null,
+        capacity: inv.capacity,
         ...sockets,
-        ...(kw ? { "charging_station:output": `${kw} kW` } : {}),
         // a mapper opening this in JOSM wants somewhere to check it against
         osm_search: `https://www.openstreetmap.org/#map=18/${round6(s.lat)}/${round6(s.lon)}`,
       },

@@ -895,6 +895,59 @@ body.is-improving { overflow: hidden; }
 .imp-actions--add .imp-primary { grid-column: 1 / -1; }
 .imp-actions--add .imp-ghost { padding-inline: 6px; white-space: nowrap; }
 
+/* What the sources say: every figure with whose it is, and the parts that did
+   not become a tag in the source's own words. Folded unless they disagree. */
+.imp-src { border: 1px solid var(--hairline); border-radius: 11px; background: var(--raised); padding: 0 14px; }
+.imp-src summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 9px; padding: 11px 0 9px;
+}
+.imp-src summary::-webkit-details-marker { display: none; }
+.imp-src summary::before {
+  content: ""; width: 6px; height: 6px; flex: none; margin: -3px 2px 0 1px;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg); transition: transform .16s var(--ease);
+}
+.imp-src[open] summary::before { transform: rotate(45deg); }
+.imp-src[open] { padding-bottom: 12px; }
+.imp-facts--src { margin: 0 0 4px; gap: 6px 14px; }
+.imp-facts--src dd { text-align: left; line-height: 1.45; }
+.imp-facts--src dd b { font-family: var(--font-mono); font-weight: 600; }
+.imp-facts--src dd.is-off { color: var(--warn); font-weight: 600; }
+.imp-unused {
+  display: inline-block; font-size: 10.5px; font-weight: 600; line-height: 1.35; color: var(--muted);
+  border: 1px dashed var(--rule); border-radius: 6px; padding: 2px 7px 1px;
+}
+.imp-flag { margin-top: 7px; padding-left: 10px; border-left: 3px solid var(--rule); color: var(--ink-2); }
+.imp-flag.is-warn { border-left-color: var(--warn-fill); color: var(--warn); font-weight: 600; }
+/* whose figure a value is — small, after the value, the full account on hover */
+.tag-src {
+  display: inline-block; vertical-align: 1px; margin-left: 5px; cursor: help;
+  font: 600 9.5px/1 var(--font-mono); letter-spacing: .03em; color: var(--muted);
+  border: 1px solid var(--hairline); border-radius: 4px; padding: 3px 4px 1px; white-space: nowrap;
+}
+.imp-chip .tag-src { cursor: inherit; margin-left: 6px; }
+.imp-chip.is-on .tag-src { color: inherit; border-color: currentColor; opacity: .75; }
+.imp-card--site .tag-src { color: #ffffffd0; border-color: #ffffff66; }
+.imp-offers { display: flex; flex-direction: column; gap: 7px; }
+.imp-offers:empty { display: none; }
+
+/* The kinds of port a site has, as the rows to place from. */
+.imp-kinds { display: flex; flex-direction: column; gap: 5px; margin: 2px 0 4px; }
+.imp-kind {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  width: 100%; text-align: left; cursor: pointer; font: inherit; font-size: var(--t-small);
+  color: var(--ink); background: var(--raised); border: 1px solid var(--rule);
+  border-radius: 9px; padding: 8px 11px 6px;
+}
+.imp-kind:hover { border-color: var(--accent); }
+.imp-kind.is-on { border-color: var(--ink); box-shadow: inset 4px 0 0 var(--ink); font-weight: 700; }
+.imp-kind-n { color: var(--ink-2); }
+.imp-kind-what em { display: block; font-style: normal; font-weight: 400; font-size: var(--t-micro); color: var(--muted); }
+.imp-kind-got { color: var(--muted); font-size: var(--t-micro); }
+.imp-kind.is-done .imp-kind-got { color: var(--ok); font-weight: 700; }
+.imp-kind.is-over .imp-kind-got { color: var(--miss); font-weight: 700; }
+.imp-cfg-what { font-weight: 700; color: var(--ink); }
+
 .imp-tags-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .imp-tags { display: flex; flex-direction: column; border: 1px solid var(--hairline); border-radius: 11px; overflow: hidden; background: var(--raised); }
 .tagrow {
@@ -1251,7 +1304,7 @@ kbd { font-size: 10.5px; background: var(--raised); border: 1px solid var(--rule
 
 <script src="site-keys.js?v=2"></script>
 <script src="board-atlas.js?v=roadatlas1"></script>
-<script src="app.js?v=roadatlas1"></script>
-<script src="edit.js?v=roadatlas1"></script>
+<script src="app.js?v=inventory1"></script>
+<script src="edit.js?v=inventory1"></script>
 </body>
 </html>
