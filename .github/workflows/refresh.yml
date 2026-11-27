@@ -57,6 +57,10 @@ jobs:
         run: bun tools/refresh.js
 
       - name: Ask OpenStreetMap what changed
+        env:
+          # Keyed FairwayMapper Overpass instance, tried first by
+          # refresh-osm.js; the public instances remain as fallbacks.
+          OVERPASS_API_KEY: ${{ secrets.OVERPASS_API_KEY }}
         run: |
           SINCE=$(bun -e 'console.log(JSON.parse(require("fs").readFileSync("data/osm.json","utf8")).generated)')
           echo "since $SINCE"
@@ -84,5 +88,22 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+
+      # deploy-pages intermittently fails in under a second with "Found 0
+      # artifact(s)" when it queries the artifact API immediately after the
+      # upload — the artifact is there (verified in the API afterwards),
+      # the metadata just has not propagated yet. A short wait up front is
+      # the primary fix; the retry below is the backstop, not the plan.
+      - name: Give the artifact a moment
+        run: sleep 30
       - id: deploy
+        uses: actions/deploy-pages@v4
+
+      # Backstop: if deploy still found no artifact, wait longer and deploy
+      # again. No re-upload — the artifact from this run is already stored.
+      - name: Wait before the deploy retry
+        if: failure() && steps.deploy.outcome == 'failure'
+        run: sleep 120
+      - id: deploy_retry
+        if: failure() && steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4

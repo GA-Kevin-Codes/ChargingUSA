@@ -27,14 +27,25 @@ const STATE_DATA = JSON.parse(readFileSync(new URL("../data/states.json", import
 const ONLY = (process.argv.find((a) => a.startsWith("--state=")) || "").split("=")[1] || null;
 const SINCE = (process.argv.find((a) => a.startsWith("--since=")) || "").split("=")[1] || null;
 const states = ONLY ? [ONLY] : Object.keys(STATE_DATA);
-const MIRRORS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+/* Endpoints in preference order. First, when OVERPASS_API_KEY is set (the
+   workflow passes it from the repo secret), the keyed FairwayMapper instance —
+   a private slot rather than the shared public queue, so "busy" is rare.
+   Then the two public instances as fallbacks. The key is part of the URL
+   path on FairwayMapper: /k/<key>/api/interpreter. Never log an endpoint:
+   the keyed one carries the secret. */
+const KEYED = process.env.OVERPASS_API_KEY
+  ? `https://api.fairwaymapper.com/k/${process.env.OVERPASS_API_KEY}/api/interpreter`
+  : null;
+const ENDPOINTS = [...(KEYED ? [KEYED] : []),
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter"];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function ask(code, attempt = 0) {
   const q = `[out:json][timeout:120];area["ISO3166-2"="US-${code}"][admin_level=4]->.a;` +
             `(nwr["amenity"="charging_station"](area.a);` +
             `nwr["charging_station"="yes"](area.a););out bb tags;`;
-  const url = MIRRORS[attempt % MIRRORS.length];
+  const url = ENDPOINTS[attempt % ENDPOINTS.length];
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "charge-board/1.0 (local snapshot refresh)" },
@@ -67,10 +78,18 @@ if (SINCE) {
             `(nwr["amenity"="charging_station"](newer:"${SINCE}");` +
             `nwr["charging_station"="yes"](newer:"${SINCE}"););out bb tags;`;
   report(`asking OpenStreetMap what changed since ${SINCE.slice(0, 16).replace("T", " ")}…`);
+  /* Wait as the primary strategy, not a token retry: a busy Overpass spell
+     usually clears in minutes, and this data is hourly, so patience beats
+     failing. Keep trying — rotating endpoints, keyed first — with waits
+     doubling 30s, 1m, 2m, 4m, then capped at 5m, until a 45-minute budget
+     is spent. Only then give up, leaving the snapshot alone as before.
+     (The old loop — 4 attempts, 6/12/18s apart — failed ~1 run in 6 when a
+     busy spell outlasted it; see the Nov 27, 2026 run logs.) */
+  const DEADLINE = Date.now() + 45 * 60 * 1000;
   let body = null;
-  for (let attempt = 0; attempt < 4 && !body; attempt++) {
+  for (let attempt = 0; !body; attempt++) {
     try {
-      const res = await fetch(MIRRORS[attempt % MIRRORS.length], {
+      const res = await fetch(ENDPOINTS[attempt % ENDPOINTS.length], {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "charge-board/1.0 (delta)" },
         body: new URLSearchParams({ data: q }),
@@ -81,8 +100,11 @@ if (SINCE) {
       body = JSON.parse(text);
     } catch (e) {
       console.log(`  attempt ${attempt + 1}: ${e.message}`);
-      if (attempt === 3) { console.log("delta failed; snapshot left alone"); process.exit(1); }
-      await sleep(6000 * (attempt + 1));
+      if (Date.now() >= DEADLINE) { console.log("delta failed after 45 minutes of retries; snapshot left alone"); process.exit(1); }
+      const wait = Math.min(Math.min(30000 * 2 ** attempt, 300000), DEADLINE - Date.now());
+      console.log(`  waiting ${Math.round(wait / 1000)}s before attempt ${attempt + 2}…`);
+      report(`OpenStreetMap busy — waiting ${Math.round(wait / 1000)}s (attempt ${attempt + 2})`);
+      await sleep(wait);
     }
   }
   const fresh = splitOsm(body.elements);
@@ -121,7 +143,7 @@ for (const [i, code] of states.entries()) {
       process.stdout.write(`${code}:${body.elements.length} `);
     } catch (e) {
       if (attempt === 3) { failed.push(code); process.stdout.write(`${code}:FAIL `); }
-      else await sleep(4000 * (attempt + 1));
+      else await sleep(15000 * 2 ** attempt);   // 15s, 30s, 60s — ride out a busy spell instead of hammering
     }
   }
   if ((i + 1) % 10 === 0) process.stdout.write("\n");
@@ -144,12 +166,12 @@ for (let pass = 0; pass < 3 && failed.length; pass++) {
         if (ts && (!newest || ts > newest)) newest = ts;
         got = true;
         console.log(`  ${code}: ${body.elements.length}`);
-      } catch { await sleep(8000 * (attempt + 1)); }
+      } catch { await sleep(20000 * (attempt + 1)); }
     }
     if (!got) again.push(code);
   }
   failed = again;
-  if (failed.length) await sleep(20000);
+  if (failed.length) await sleep(60000);
 }
 
 const { sites, hosts } = splitOsm([...byId.values()]);
