@@ -1,3 +1,5 @@
+[![Refresh and publish](https://github.com/GA-Kevin-Codes/ChargingUSA/actions/workflows/refresh.yml/badge.svg)](https://github.com/GA-Kevin-Codes/ChargingUSA/actions/workflows/refresh.yml)
+
 # ChargingUSA
 
 Every public DC fast-charging site in the US, counted per site rather than per
